@@ -1,117 +1,146 @@
 # pastiche-skills
 
-**小説の文体・作風を計量分析し、抽象的な作風プロファイルを使って別の内容の文章を執筆する Agent Skills。** 日本語TXTコーパスを想定。Python 3.10+、初期状態では追加依存なし。原文の分析はローカルで完結し、LLMや外部APIは使いません。
+**日本語の文章コーパスから文体・物語構造を分析し、再利用可能な執筆ガイドを作る Agent Skills。**
 
-本リポジトリには、作品本文・作者固有の実例・R-18文章は**一切入れていません**。公開GitHubリポジトリにコーパスをアップロードしないでください。
+`pastiche-profile` は文章の統計的特徴と、繰り返し現れる物語上の構成パターンを抽出します。`pastiche-write` は作成したガイドを使って、新しい題材の構成・執筆・改稿を進めます。
 
-## 2つのSkill
+処理はローカル実行を基本とします。コーパス、原文の抜粋、作品名をこのリポジトリに格納する必要はありません。Python 3.10以上に対応し、文体統計は標準ライブラリだけで利用できます。物語構造の意味解析にはローカルLLMが必要です。
 
-| Skill | 自然言語での呼び出し例 | 動作 |
+## Skills
+
+| Skill | 用途 | 主な成果物 |
 | --- | --- | --- |
-| [`pastiche-profile`](skills/pastiche-profile/SKILL.md) | 「pastiche-skillsを使って、`/path/to/corpus` から作風プロファイルを作って」 | ローカルTXTを計量分析 → `style_profile.json`・`style_bible.md`・人手注釈テンプレートを作る |
-| [`pastiche-write`](skills/pastiche-write/SKILL.md) | 「この `style_bible.md` を使い、廃駅で手紙を見つけるという内容の短編を書いて」 | 原案 → 因果・人物状態を設計 → 執筆 → 整合性・文体の改稿 |
+| [`pastiche-profile`](skills/pastiche-profile/SKILL.md) | 文体を計量分析し、作品横断の構成パターンを抽出する | `style_profile.json`, `narrative_rules.json`, `style_bible.md` |
+| [`pastiche-write`](skills/pastiche-write/SKILL.md) | 作風プロファイルに従い、新規の文章を設計・執筆・改稿する | 新規原稿と任意の評価レポート |
 
-## インストール
+自然言語での依頼例：
 
-Agent Skills対応環境なら、リポジトリからSkillsを追加する（環境によって導入操作が異なります）。例：
+> pastiche-profileを使って、`/path/to/corpus` のTXTから作風プロファイルを作ってください。文体の統計と、繰り返し現れるナラティブルールを抽出してください。
+
+> pastiche-writeを使って、作成した `style_bible.md` に従い、「廃駅で見つけた手紙によって主人公の認識が変わる」という短編を書いてください。
+
+## 導入
+
+Agent Skillsに対応した環境で、次のコマンドまたは対応するSkill管理機能を利用してください。
 
 ```bash
 npx skills add zkamiyama/pastiche-skills
 ```
 
-または `skills/pastiche-profile` と `skills/pastiche-write` を、エージェントが読み取るSkillsディレクトリにコピーしてください。`SKILL.md` はAgent Skills仕様準拠で、両Skillが個別に検出されます。CLIは前者に同梱されているため、**Profile Skill単体でも分析できます**。
+または `skills/pastiche-profile` と `skills/pastiche-write` を利用環境のSkillsディレクトリに配置します。CLIは前者の `scripts/` に含まれます。
 
-## 最初に手元のPCで行う（原文は一切アップロードしない）
+## CLIで作風プロファイルを生成する
+
+### 1. 文体の計量分析（LLM不要）
+
+TXTファイルを一作品につき一ファイルで用意し、ローカルPCで実行します。入力はUTF-8 / CP932を受け付けます。
 
 ```bash
-# 作品ごとの UTF-8 または CP932 の .txt をフォルダに配置
-# /path/to/corpus はGitHubリポジトリの外側を推奨
 python3 skills/pastiche-profile/scripts/pastiche.py profile \
   /path/to/corpus --out /path/to/.pastiche-private/profile
 ```
 
-生成物は3ファイル（原文やファイル名は含まれません）。
-
-```text
-.pastiche-private/profile/
-  style_profile.json     ← 作品ごとの文長や会話率などの集約数値
-  style_bible.md         ← 他のLLMに渡せる抽象的な文体ルール
-  narrative_rules.json   ← 論理・心理・筋立ての人手検証用テンプレート
-```
-
-原文の閲覧が許されないクラウド型エージェントでも、**これら数値・抽象規則の出力ファイルだけを扱う**設計です。ただし、数値や人手注釈が絶対に機密でないとは限りません。送信先と共有可否を確認してください。
-
-### オプション
+オプションで同ジャンルの対照コーパスを比較できます。
 
 ```bash
-# 同ジャンルの別作者を対照コーパスとして比較（差分は記述統計）
 python3 skills/pastiche-profile/scripts/pastiche.py profile \
-  /path/to/corpus --reference /path/to/control --out .pastiche-private/profile
+  /path/to/corpus --reference /path/to/comparison \
+  --out /path/to/.pastiche-private/profile
+```
 
-# ローカルで形態素解析も追加（初回の依存インストールのみ通信あり）
+形態素解析を追加する場合：
+
+```bash
 python3 -m pip install 'fugashi[unidic-lite]'
 python3 skills/pastiche-profile/scripts/pastiche.py profile \
-  /path/to/corpus --morphology fugashi --out .pastiche-private/profile
+  /path/to/corpus --morphology fugashi \
+  --out /path/to/.pastiche-private/profile
 ```
 
-`narrative_rules.json` の `rules` は初期状態で空。作者固有の「認識反転」「人物の選択」「葛藤を作る条件」等は**頻度表から確定できません**。原文を手元で読んだ人が、具体的な作品本文を転記せず、匿名の証拠IDとともに機構を記録します。人手で検証したものだけを執筆ルールに入れます。
+### 2. ナラティブルールの抽出（ローカルLLM）
 
-```json
-{
-  "schema": "pastiche.narrative.v1",
-  "rules": [
-    {
-      "status": "verified",
-      "trigger": "登場人物の前提が行動の結果と食い違うとき",
-      "mechanism": "矛盾への合理化を一度挟み、追加の結果を提示して前提を問い直す",
-      "effect": "読者の認識も段階的に更新される",
-      "evidence_ids": ["W01", "W04"]
-    }
-  ]
-}
+Ollamaなどのローカル推論環境に、日本語文章を解析できるモデルを用意します。モデルの導入や起動は、各推論環境の手順に従ってください。
+
+```bash
+python3 skills/pastiche-profile/scripts/narrative.py \
+  /path/to/corpus \
+  --backend ollama --model YOUR_LOCAL_MODEL \
+  --out /path/to/.pastiche-private/profile \
+  --min-works 2
 ```
 
-この内容は**説明用の架空の例**であり、特定の作者についての分析結果ではありません。編集後は：
+`llama.cpp` などのOpenAI互換ローカルサーバーも使用できます。
+
+```bash
+python3 skills/pastiche-profile/scripts/narrative.py \
+  /path/to/corpus \
+  --backend openai-compatible \
+  --endpoint http://127.0.0.1:8080/v1/chat/completions \
+  --model YOUR_LOCAL_MODEL \
+  --out /path/to/.pastiche-private/profile
+```
+
+通信先は同じPCのloopbackアドレスに限定しています。リモートのモデルAPIには接続しません。実行環境がクラウドの場合、`localhost` は利用者のPCではないため、コーパスのあるPC上でコマンドを実行してください。
+
+### 3. 文体と物語構造を一つのガイドにまとめる
 
 ```bash
 python3 skills/pastiche-profile/scripts/pastiche.py guide \
-  --profile .pastiche-private/profile/style_profile.json \
-  --notes .pastiche-private/profile/narrative_rules.json \
-  --out .pastiche-private/profile/style_bible.md
+  --profile /path/to/.pastiche-private/profile/style_profile.json \
+  --notes /path/to/.pastiche-private/profile/narrative_rules.json \
+  --out /path/to/.pastiche-private/profile/style_bible.md
 ```
 
-## 生成原稿のローカル検証
+出力例：
+
+```text
+.pastiche-private/profile/
+├── style_profile.json    # 文体の集約統計
+├── narrative_rules.json  # 証拠IDと支持件数を付けた構成パターン
+├── narrative_audit.json  # 自動抽出・検証処理の件数
+└── style_bible.md        # 生成時に使う文体・構成ガイド
+```
+
+`narrative_rules.json` は人手入力しなくても生成できます。抽出処理は事象と人物の認識・判断を分け、別プロンプトによる証拠照合の後、複数作品に現れる共通の `trigger → operation → effect` をまとめます。二段階のモデル判定と作品間の反復は、文学的な解釈の正しさを保証するものではありません。
+
+**ルールの扱い**：`model_supported` はローカルモデルによる二段階の照合を通過した候補、`hypothesis` は支持例が十分でない候補です。執筆ガイドには前者だけを採用します。`--min-works` は統計的な有意性ではなく、反復の最低作品数を指定します。
+
+## 生成原稿のローカル評価
 
 ```bash
 python3 skills/pastiche-profile/scripts/pastiche.py evaluate \
-  --profile .pastiche-private/profile/style_profile.json \
+  --profile /path/to/.pastiche-private/profile/style_profile.json \
   --draft /path/to/new-draft.txt \
-  --out .pastiche-private/evaluation.json
-
-# 取得許可のある原文と完全一致する長い文字列を検査する（原文は送信・出力しない）
-python3 skills/pastiche-profile/scripts/pastiche.py evaluate \
-  --profile .pastiche-private/profile/style_profile.json \
-  --draft /path/to/new-draft.txt --corpus /path/to/corpus \
-  --overlap-chars 40 --out .pastiche-private/evaluation.json
+  --out /path/to/.pastiche-private/evaluation.json
 ```
 
-数値で測れるのは表面の文体だけ。評価結果は文学的な良し悪し、同一作者らしさ、著作権適法性、独創性の証明ではありません。`--corpus` は空白を取り除いた40文字以上の完全一致をスクリーニングしますが、パラフレーズを検知せず、短い共通言い回しで誤検出する場合もあります。
+原文へのアクセス許可がある場合、長い完全一致箇所の有無をローカルで検査できます。照合箇所の文章はレポートに含みません。
 
-## 安全設計と制約
+```bash
+python3 skills/pastiche-profile/scripts/pastiche.py evaluate \
+  --profile /path/to/.pastiche-private/profile/style_profile.json \
+  --draft /path/to/new-draft.txt --corpus /path/to/corpus \
+  --overlap-chars 40 --out /path/to/.pastiche-private/evaluation.json
+```
 
-- 生コーパスに対する `cat`・読込・引用・送信をSkillsは要求しません。Pythonコード内で数値化し、集約値のみ出力します。
-- 実行環境そのものがクラウドであれば、そこにコーパスを置く段階で外部送信になります。**ローカルPCで解析コマンドを実行してから**、許可できる抽象的な出力だけをエージェントに渡してください。
-- 自動判定する談話マーカーは心理・論理的因果関係を意味しません。未知の特性を作者の癖として捏造しないでください。
-- 特定作者の個性的な文章、台詞、人物、固有設定、筋書きをコピーしない。権利者の許諾やサービス規約もユーザー側で確認してください。
-- 成人向け作品の規約上の閲覧制限や、生成先LLMのコンテンツ制約を回避するものではありません。
-- GitHubのActionsでは合成テストデータしか処理しません。
+一致検査は一定長以上の完全一致を探すためのもので、言い換えや物語展開の類似を評価するものではありません。文体統計も作品の品質・作者同定・独創性の証明にはなりません。
 
-## 研究の出典と検証
+## データ管理の方針
 
-[研究マップ・一次資料・設計への対応・限界](docs/research.md) を参照。運用を固定するため、実装では **指標の数値化 → 検証済み構造規則 → 計画/執筆/改稿 → 数値・人手評価** を分離しています。
+- **コーパスはローカルに置く**：公開リポジトリにはプログラム、実行手順、合成テストだけを含めます。
+- **生成物を分離する**：レポートやプロファイルは `.pastiche-private/` などのGit管理外の場所に保存します。抽象的なプロファイルも共有前に内容を確認してください。
+- **解析と執筆を分離する**：原文を読むのはローカルPythonとローカル推論サーバーのみ。執筆エージェントには抽象化済みの成果物だけを渡します。
+- **根拠を示す**：因果・人物心理の判定には誤りがあり得ます。モデルの一致を独立した学術的検証とみなしません。
+- **元作品との境界を保つ**：人物名・固有設定・台詞・文章の転用を避け、データの使用許可や各サービスの利用条件を確認してください。
+
+## 研究資料とテスト
+
+手法の参考文献と適用範囲は [docs/research.md](docs/research.md)、因果抽出・一般化の具体的手順は [NARRATIVE_METHOD.md](skills/pastiche-profile/references/NARRATIVE_METHOD.md) を参照してください。論文の専用モデルをそのまま再実装したものではありません。
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-MIT License（既存の `LICENSE` に従う）。
+テストは合成文章と模擬LLM応答を使用します。実際の文章群に対する人手評価や、モデル間での同等の再現性はまだ測定していません。
+
+MIT License（[LICENSE](LICENSE)）。
