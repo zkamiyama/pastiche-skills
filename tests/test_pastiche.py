@@ -25,7 +25,7 @@ class OfflinePasticheTests(unittest.TestCase):
                 'しかし、駅長はまだ何も言わなかった。\n'
                 '翌朝、ふたりは手紙を読んだ。どうやら、道が変わったらしい。\n'
             ) * (n + 3)
-            (self.corpus / f'SECRET_AUTHOR_WORK_{n}.txt').write_text(work, encoding='utf-8')
+            (self.corpus / f'SAMPLE_WORK_{n}.txt').write_text(work, encoding='utf-8')
         self.out = self.root / 'out'
 
     def tearDown(self):
@@ -45,7 +45,7 @@ class OfflinePasticheTests(unittest.TestCase):
         self.assertEqual(profile['works'], 6)
         self.assertEqual(profile['confidence'], 'moderate_descriptive_only')
         exported = '\n'.join(f.read_text(encoding='utf-8') for f in self.out.glob('*'))
-        self.assertNotIn('SECRET_AUTHOR_WORK_', exported)
+        self.assertNotIn('SAMPLE_WORK_', exported)
         self.assertNotIn('駅長はまだ何も言わなかった', exported)
         self.assertGreater(profile['metrics']['dialogue_char_ratio']['median'], 0)
         self.assertIn('opening', profile['phase_medians'])
@@ -66,7 +66,7 @@ class OfflinePasticheTests(unittest.TestCase):
 
     def test_evaluation_and_overlap_only_counts(self):
         self.make_profile()
-        original = (self.corpus / 'SECRET_AUTHOR_WORK_0.txt').read_text(encoding='utf-8')
+        original = (self.corpus / 'SAMPLE_WORK_0.txt').read_text(encoding='utf-8')
         draft = self.root / 'draft.txt'
         draft.write_text('独自の冒頭。\n' + original[:160], encoding='utf-8')
         result = self.root / 'eval.json'
@@ -85,7 +85,7 @@ class OfflinePasticheTests(unittest.TestCase):
         self.assertNotEqual(run.returncode, 0)
         if hasattr(Path, 'symlink_to'):
             symlink = self.root / 'link.txt'
-            symlink.symlink_to(self.corpus / 'SECRET_AUTHOR_WORK_0.txt')
+            symlink.symlink_to(self.corpus / 'SAMPLE_WORK_0.txt')
             self.assertRaises(ValueError, lib.read_text, symlink)
 
     def test_cp932_and_low_confidence(self):

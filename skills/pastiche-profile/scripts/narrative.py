@@ -195,7 +195,7 @@ Event2Mind (intention/reaction), GLUCOSE (specific -> general causal explanation
 Narrative Event Chains (same participant, ordered events), RST (causal vs rhetorical vs only temporal).
 
 Make ONLY evidence-supported observations. Never assume that event A causes B just because A precedes B.
-Do not over-interpret genre conventions, violence, sex, character names or settings as author rules.
+Do not over-interpret genre conventions, topic-specific events, character names or settings as author rules.
 No quotes, original nouns, details, plot summaries or prose in the JSON output: finite tags and segment IDs ONLY.
 Event ids must be E1, E2, ... local to THIS chunk. For each pattern, provide two different event_ids
 and at least one non-temporal link between them. If ambiguous, omit. Maximum 6 patterns/chunk.

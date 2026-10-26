@@ -1,4 +1,4 @@
-"""Mock-only tests. No live LLM, internet, copyrighted or restricted materials."""
+"""Mock-only tests. No live LLM, internet, external document collections."""
 from __future__ import annotations
 
 import json
@@ -70,7 +70,7 @@ class NarrativePipelineTests(unittest.TestCase):
                 '主人公はしばらく否定し、その後で判断を変えた。\n'
                 '別の選択をしてみると、これまでと違う結果が出た。\n'
             ) * 3
-            (self.corpus / f'SENSITIVE_SOURCE_TITLE_{n}.txt').write_text(story, encoding='utf-8')
+            (self.corpus / f'SAMPLE_STORY_TITLE_{n}.txt').write_text(story, encoding='utf-8')
         self.out = self.root / 'profile'
 
     def tearDown(self):
@@ -91,7 +91,7 @@ class NarrativePipelineTests(unittest.TestCase):
         self.assertTrue(any(p.startswith('TASK=VERIFY') for p in fake.prompts))
         # Output must contain template prose only, never the fictional source or filenames.
         exported = ''.join(p.read_text(encoding='utf-8') for p in self.out.iterdir())
-        for sentinel in ('SENSITIVE_SOURCE_TITLE', '古い時計', '主人公はしばらく', 'これまでの推測'):
+        for sentinel in ('SAMPLE_STORY_TITLE', '古い時計', '主人公はしばらく', 'これまでの推測'):
             self.assertNotIn(sentinel, exported)
         style_cli = SCRIPTS / 'pastiche.py'
         prep = subprocess.run([sys.executable, str(style_cli), 'profile', str(self.corpus), '--out', str(self.out)],

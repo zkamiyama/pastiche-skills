@@ -281,7 +281,7 @@ def drafting_guide(profile: dict[str, Any], notes: dict[str, Any] | None = None)
 
 def template_notes() -> dict[str, Any]:
     return {"schema": "pastiche.narrative.v1", "rules": [],
-            "instructions": "Add rules manually after local reading: {status: verified, trigger, mechanism, effect, evidence_ids: [local anonymized IDs]}. Do not paste copyrighted passages or sexual details. Speculative rules must use status: hypothesis."}
+            "instructions": "Add rules manually after local reading: {status: verified, trigger, mechanism, effect, evidence_ids: [local anonymized IDs]}. Do not paste source passages, names, or plot-specific details. Speculative rules must use status: hypothesis."}
 
 
 def is_guide_eligible(rule: dict[str, Any]) -> bool:
