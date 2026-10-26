@@ -1,0 +1,19 @@
+# Source corpora and all generated reports must stay on user's machine
+.pastiche-private/
+**/.pastiche-private/
+corpus/
+**/corpus/
+raw/
+**/raw/
+private/
+**/private/
+profiles/
+**/profiles/
+reports/
+**/reports/
+.env
+.env.*
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
