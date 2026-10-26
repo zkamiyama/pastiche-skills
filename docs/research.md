@@ -33,3 +33,29 @@
 **未検証・未実装：** 実コーパスでの文体再現度、人間によるブラインド比較、R-18専用評価、ジャンルごとの実証的特徴抽出、マルチモデルでの同等出力保証、文学的な因果構造の自動理解、外部APIと接続しないことの第三者監査。すべてを完成済みの学術再現実装として扱わない。
 
 **安全境界：** 研究用のWeb検索にコーパス内容は使わず、GitHubには原文を含めない。ローカル実行コードはネットワークAPI呼出や外部モデル接続を持たず、標準出力も集約値とパスだけに限定する。
+
+---
+
+## 2026-10-26 追加調査：LLMによるナラティブルールの自動帰納（v0.2）
+
+### 新しい論点と一次文献
+
+手動の `narrative_rules.json` 作成を自動化するため、**(1) 人物に沿った事象列、(2) 意図・結果と因果の区別、(3) 作品固有から汎用条件への一般化、(4) 原文根拠と複数作品の検証、(5) 個人作風の移転可能性と限界**の5論点を検討した。原文の取得・公開はこのリポジトリでは行っていない。次の文献は、直接の根拠と採用の限界を突き合わせたもの。
+
+| 論点 | 原著 | 採用/非採用 |
+| --- | --- | --- |
+| 事象連鎖 | [Chambers & Jurafsky, 2008: Narrative Event Chains](https://aclanthology.org/P08-1090/) と [2009: Narrative Schemas and Participants](https://aclanthology.org/P09-1068/) | 事象・参与者を結びつける表現のみ。論文の教師なし帰納と時間分類器を再実装していない。 |
+| 人物の行動・内面 | [Elson, *Modeling Narrative Discourse*, Story Intention Graphs](https://www.cs.columbia.edu/~delson/pubs/Modeling-Narrative-Discourse_Elson_R4.pdf); [Event2Mind (ACL 2018)](https://aclanthology.org/P18-1043/) | 出来事と認識／意図を別々に符号化。完全なSIGではなく短いチャンクの有限タグで代用。 |
+| 具体→一般化 | [GLUCOSE (EMNLP 2020)](https://aclanthology.org/2020.emnlp-main.370/) | 文脈に依存する因果説明と一般的ルールを区別。抽出した本文表現をそのまま一般化しない安全な固定テンプレート採用。GLUCOSE全十次元は再現していない。 |
+| 因果と談話 | [RST Introduction (Mann & Thompson, 1988)](https://www.sfu.ca/rst/01intro/intro.html); [Sun et al., 2024: Event Causality](https://aclanthology.org/2024.naacl-long.191/) | 局所LLMによる時系列-only棄却と因果／意図／談話の判定。因果同定の精度は未測定。 |
+| 人物状態と長期依存 | [OpenToM (ACL 2024)](https://aclanthology.org/2024.acl-long.466/); [BookSum (2021)](https://arxiv.org/abs/2105.08209) | 人物知識状態の確認を生成Skillに追加。チャンクを跨ぐ長期依存は未解決と明記。 |
+| 生成と独立評価 | [Re3 (EMNLP 2022)](https://aclanthology.org/2022.emnlp-main.296/); [DOC (ACL 2023)](https://aclanthology.org/2023.acl-long.190/); [Tian et al. (EMNLP 2024)](https://aclanthology.org/2024.emnlp-main.978/) | プラン→本文→因果/文体修正。専門モデルや論文の人手評価の性能改善をこのSkillの精度として転用しない。 |
+| ローカルAPI | [Ollama API](https://github.com/ollama/ollama/blob/main/docs/api.md); [llama.cpp server](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md) | ローカルhostのみ・ストリーミングなし・JSON出力。汎用クラウドOpenAIエンドポイントを受け付けない。 |
+
+### 実装における判断と未解決
+
+- コーパスをクラウドAgentへ渡す設計はやめ、**ローカルLLMに対するローカルPythonからのリクエスト**へ限定。公開GitHubにはコード・研究URL・合成単体テストだけ。
+- 根拠付きタグ抽出→同じ原文を使った別指示の再判定→作品横断で同型パターンを統合。出力文章は原文やモデル自由記述ではなく、タグに対する固定テンプレートから生成。
+- `model_supported` は **自動検証フロー上の状態**。真の作者性、客観的因果、異ジャンルでの再現率とは別問題。モデルの自己検証は独立アノテーションではない。最低2作品という数は実装用閾値であり論文が有効性を保証したものではない。
+- 反例探索と作品間の非独立性推定、文脈を跨ぐ人物同一性・伏線検出、タグ自体の網羅性は未解決。タグ付き `narrative_rules.json` を不変の真理として扱わない。
+- 実装手順・具体的な出力仕様・失敗時の処理は [skills/pastiche-profile/references/NARRATIVE_METHOD.md](../skills/pastiche-profile/references/NARRATIVE_METHOD.md) を参照。

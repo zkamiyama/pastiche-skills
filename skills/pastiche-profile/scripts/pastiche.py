@@ -17,7 +17,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 SCHEMA = "pastiche.style.v1"
 MARKERS = {
     "contrast": ("しかし", "だが", "ところが", "けれども", "それでも", "一方で", "とはいえ"),
@@ -266,13 +266,16 @@ def drafting_guide(profile: dict[str, Any], notes: dict[str, Any] | None = None)
               "- Do not infer hidden narrative rules from numbers; require separate verified notes.",
               "- Do not copy unique phrases, passages, plot beats, character identities, or settings.", ""]
     rules = (notes or {}).get("rules", [])
-    verified = [r for r in rules if r.get("status") == "verified" and r.get("mechanism")]
-    if verified:
-        lines += ["## Human-verified narrative mechanisms", ""]
-        for r in verified:
-            lines.append(f"- {r['mechanism']} (trigger: {r.get('trigger', 'unspecified')}; effect: {r.get('effect', 'unspecified')})")
+    accepted = [r for r in rules if is_guide_eligible(r)]
+    lines += ["## Narrative mechanisms — provenance required", "",
+              "These are optional, not copyable plot templates. `model_supported` denotes automated local model agreement and recurrent corpus coding; it is NOT independent verification or author-specificity.", ""]
+    if accepted:
+        for r in accepted:
+            support = (f"; {r.get('support_work_count')} independent TXT works, model-double-checked"
+                       if r.get('status') == 'model_supported' else '; manually verified')
+            lines.append(f"- IF {r.get('trigger', 'unspecified')}; THEN {r['mechanism']}; EXPECT {r.get('effect', 'unspecified')}{support}.")
     else:
-        lines += ["## Human-verified narrative mechanisms", "", "None supplied. Use original plot logic for each new brief; do not invent source-grounded plot rules."]
+        lines.append("No validated narrative mechanisms supplied. Do not infer causal laws from punctuation statistics.")
     return "\n".join(lines) + "\n"
 
 
@@ -281,15 +284,34 @@ def template_notes() -> dict[str, Any]:
             "instructions": "Add rules manually after local reading: {status: verified, trigger, mechanism, effect, evidence_ids: [local anonymized IDs]}. Do not paste copyrighted passages or sexual details. Speculative rules must use status: hypothesis."}
 
 
+def is_guide_eligible(rule: dict[str, Any]) -> bool:
+    if not isinstance(rule, dict) or not isinstance(rule.get("mechanism"), str) or not rule["mechanism"].strip():
+        return False
+    if rule.get("status") == "verified":
+        return True  # Legacy human confirmation (v1), not automatic proof.
+    if rule.get("status") != "model_supported":
+        return False
+    evidence = rule.get("evidence_ids") or []
+    distinct_works = {eid.split(":", 1)[0] for eid in evidence
+                      if isinstance(eid, str) and re.fullmatch(r"W\d{4}:S\d{4,}", eid)}
+    return (rule.get("source") == "local_llm_two_pass" and rule.get("validation_passes") == 2
+            and type(rule.get("support_work_count")) is int and rule["support_work_count"] >= 2
+            and len(distinct_works) >= 2 and len(distinct_works) == rule["support_work_count"])
+
+
 def load_notes(path: Path | None) -> dict[str, Any] | None:
     if path is None:
         return None
     obj = json.loads(path.read_text(encoding="utf-8"))
-    if obj.get("schema") != "pastiche.narrative.v1" or not isinstance(obj.get("rules"), list):
+    schema = obj.get("schema")
+    if schema not in {"pastiche.narrative.v1", "pastiche.narrative.v2"} or not isinstance(obj.get("rules"), list):
         raise ValueError("invalid narrative notes schema")
+    allowed = {"verified", "hypothesis", "rejected"} if schema.endswith("v1") else {"model_supported", "hypothesis", "rejected"}
     for rule in obj["rules"]:
-        if not isinstance(rule, dict) or rule.get("status") not in {"verified", "hypothesis", "rejected"}:
-            raise ValueError("each rule requires status: verified|hypothesis|rejected")
+        if not isinstance(rule, dict) or rule.get("status") not in allowed:
+            raise ValueError(f"invalid narrative rule status for {schema}")
+        if schema.endswith("v2") and rule.get("status") == "model_supported" and not is_guide_eligible(rule):
+            raise ValueError("unverified auto rule: missing two independent works or local two-pass provenance")
     return obj
 
 
@@ -350,8 +372,13 @@ def command_profile(args: argparse.Namespace) -> int:
     out = args.out
     out.mkdir(parents=True, exist_ok=True)
     json_write(out / "style_profile.json", result)
-    json_write(out / "narrative_rules.json", template_notes())
-    (out / "style_bible.md").write_text(drafting_guide(result), encoding="utf-8")
+    notes_file = out / "narrative_rules.json"
+    if notes_file.exists():
+        notes = load_notes(notes_file)  # Preserve existing auto rules on re-profiling.
+    else:
+        notes = template_notes()
+        json_write(notes_file, notes)
+    (out / "style_bible.md").write_text(drafting_guide(result, notes), encoding="utf-8")
     if args.reference:
         refs, ref_phases, ref_skipped = collect(args.reference, tagger, args.min_chars)
         comparison = reference_delta(result, aggregate(refs, ref_phases, ref_skipped, args.morphology))
@@ -379,7 +406,7 @@ def command_guide(args: argparse.Namespace) -> int:
     notes = load_notes(args.notes)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(drafting_guide(profile, notes), encoding="utf-8")
-    print(f"Style guide saved: {args.out.resolve()}; only verified narrative rules incorporated")
+    print(f"Style guide saved: {args.out.resolve()}; only evidence-filtered narrative rules incorporated")
     return 0
 
 
