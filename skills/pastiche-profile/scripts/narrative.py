@@ -110,7 +110,7 @@ def validate_endpoint(url: str, backend: str, allow_remote: bool = False,
         raise ValueError("invalid endpoint port") from exc
     if (parsed.scheme not in {"http", "https"} or not parsed.hostname
         or parsed.username is not None or parsed.password is not None
-        or parsed.query or parsed.fragment or parsed.path != desired
+        or parsed.query or parsed.fragment or not parsed.path.endswith(desired)
         or (port is not None and not 1 <= port <= 65535)):
         raise ValueError(f"endpoint must be http(s)://host[:port]{desired} without credentials/query")
     loopback, private_ip = _endpoint_scope(parsed.hostname)
