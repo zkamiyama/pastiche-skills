@@ -125,7 +125,7 @@ def main(argv=None):
         print(f"[pastiche] backend={backend} model={name} endpoint={endpoint}",flush=True)
         if args.check:
             # Synthetic query only; do not open the corpus.
-            check_model = narrative.LocalModel(backend, name, endpoint, 30,
+            check_model = narrative.LocalModel(backend, name, endpoint, args.timeout,
                                                allow_remote=True, allow_insecure_http=True,
                                                api_key_env=args.api_key_env, stream=False)
             check_model.ask('Reply ONLY with a JSON object containing {"ok":true}.')
