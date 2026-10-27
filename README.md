@@ -4,7 +4,7 @@
 
 `pastiche-profile` は文章の統計的特徴と、繰り返し現れる物語上の構成パターンを抽出します。`pastiche-write` は作成したガイドを使って、新しい題材の構成・執筆・改稿を進めます。
 
-処理はローカル実行を基本とします。コーパス、原文の抜粋、作品名をこのリポジトリに格納する必要はありません。Python 3.10以上に対応し、文体統計は標準ライブラリだけで利用できます。物語構造の意味解析にはローカルLLMが必要です。
+文章の統計処理はローカルで完結します。物語構造の解析では、利用者が指定したOllama/OpenAI互換モデルサーバーへ作品のチャンクを送信します。モデルサーバーは同じPCでも、LAN内の別マシンでも、外部のHTTPSホストでも構いません。原文を本リポジトリへ格納する必要はありません。Python 3.10以上で利用できます。
 
 ## Skills
 
@@ -57,9 +57,9 @@ python3 skills/pastiche-profile/scripts/pastiche.py profile \
   --out /path/to/.pastiche-private/profile
 ```
 
-### 2. ナラティブルールの抽出（ローカルLLM）
+### 2. ナラティブルールの抽出（指定したモデルサーバー）
 
-Ollamaなどのローカル推論環境に、日本語文章を解析できるモデルを用意します。モデルの導入や起動は、各推論環境の手順に従ってください。
+日本語文章を解析できるモデルをOllama等で用意します。初期状態ではPC内のOllamaに接続します。**チャンク処理は自動的に途中保存されるので、失敗時には同じコマンドで再開できます。**
 
 ```bash
 python3 skills/pastiche-profile/scripts/narrative.py \
@@ -69,7 +69,7 @@ python3 skills/pastiche-profile/scripts/narrative.py \
   --min-works 2
 ```
 
-`llama.cpp` などのOpenAI互換ローカルサーバーも使用できます。
+`llama.cpp` 等のOpenAI互換サーバーも使用できます。
 
 ```bash
 python3 skills/pastiche-profile/scripts/narrative.py \
@@ -80,7 +80,46 @@ python3 skills/pastiche-profile/scripts/narrative.py \
   --out /path/to/.pastiche-private/profile
 ```
 
-通信先は同じPCのloopbackアドレスに限定しています。リモートのモデルAPIには接続しません。実行環境がクラウドの場合、`localhost` は利用者のPCではないため、コーパスのあるPC上でコマンドを実行してください。
+### 接続先を別のマシンにする
+
+LAN内のOllamaサーバーへの接続（**プライベートIPのHTTP**）：
+
+```bash
+python3 -u skills/pastiche-profile/scripts/narrative.py /path/to/corpus \
+  --backend ollama --model MODEL_NAME \
+  --endpoint http://192.168.1.20:11434/api/generate \
+  --allow-remote --out /path/to/.pastiche-private/profile
+```
+
+**外部HTTPS**のOpenAI互換エンドポイント（APIキーは環境変数から渡す）：
+
+```bash
+python3 -u skills/pastiche-profile/scripts/narrative.py /path/to/corpus \
+  --backend openai-compatible --model MODEL_NAME \
+  --endpoint https://inference.example.com/v1/chat/completions \
+  --allow-remote --api-key-env MODEL_API_KEY \
+  --out /path/to/.pastiche-private/profile
+```
+
+外部IP・ホストへ接続する場合は、**原文の一部をそのモデルサーバーへ送信します**。送信を許可できることを確認して `--allow-remote` を指定します。パブリックホストへの暗号化されていないHTTPは通常拒否し、明示的に許可するなら `--allow-insecure-http` を追加します（非推奨）。リダイレクトと環境プロキシは無効、HTTPSの証明書検証は有効です。
+
+### 長時間処理・進捗・中断再開
+
+- **既定の `--timeout 0` はタイムアウト無制限**（ソケットの読み取り待ち）。固まった場合は `Ctrl+C` で中断し、そのまま再実行できます。上限が必要なら `--timeout 1200` 等を指定します。
+- **ストリーミングと15秒ごとの進捗表示**が既定で有効。生成中の文章は表示しません。非対応サーバーは `--no-stream` を使用します。`--progress-interval 5` などに変更できます。
+- **SQLiteによるチャンク単位のチェックポイント**を使用します。抽出・検証が終わった部分だけが再利用されるので、前回 `W0001 chunk 3` で止まってもチャンク1・2に戻りません。再実行時には入力本文・モデル・接続先・解析バージョンの一致も検証します。全件再処理は `--restart`。
+- **失敗したリクエストを2回まで再試行**。回数は `--retries`、待機は `--retry-delay` で調整できます。恒久的な認証・指定エラーは再試行しません。
+- `narrative_progress.json` は別プロセスから状態・現在の作品/チャンク・完了数を確認できます。標準エラーの進捗も確認してください。
+
+```text
+.pastiche-private/profile/
+├── narrative_checkpoint.sqlite3  # 抽出・検証段階の復帰データ
+├── narrative_progress.json       # 現在の状態（running/completed/failed/interrupted）
+├── narrative_rules.json
+└── narrative_audit.json
+```
+
+エージェントや端末ツール自体の実行時間制限は、`--timeout` と別です。端末セッションが切れても、同じコマンドで継続できます。モデルサーバーと通信できても、推論の遅延以外にネットワークの停止などが原因となる場合があります。
 
 ### 3. 文体と物語構造を一つのガイドにまとめる
 
@@ -127,9 +166,9 @@ python3 skills/pastiche-profile/scripts/pastiche.py evaluate \
 
 ## データ管理の方針
 
-- **コーパスはローカルに置く**：公開リポジトリにはプログラム、実行手順、合成テストだけを含めます。
+- **コーパスを公開しない**：公開リポジトリにはプログラム、実行手順、合成テストだけを含めます。
 - **生成物を分離する**：レポートやプロファイルは `.pastiche-private/` などのGit管理外の場所に保存します。抽象的なプロファイルも共有前に内容を確認してください。
-- **解析と執筆を分離する**：原文を読むのはローカルPythonとローカル推論サーバーのみ。執筆エージェントには抽象化済みの成果物だけを渡します。
+- **解析と執筆を分離する**：原文を読むのはPython処理と、ユーザーが接続を選択した推論サーバー。執筆エージェントには抽象化済みの成果物だけを渡します。
 - **根拠を示す**：因果・人物心理の判定には誤りがあり得ます。モデルの一致を独立した学術的検証とみなしません。
 - **元作品との境界を保つ**：人物名・固有設定・台詞・文章の転用を避け、データの使用許可や各サービスの利用条件を確認してください。
 

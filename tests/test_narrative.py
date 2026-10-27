@@ -1,7 +1,14 @@
-"""Mock-only tests. No live LLM, internet, external document collections."""
+"""Synthetic-data tests: mock model responses and loopback protocol fixtures."""
 from __future__ import annotations
 
+import io
 import json
+import time
+from contextlib import contextmanager, redirect_stderr
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import threading
+from unittest.mock import patch
+import sqlite3
 from pathlib import Path
 import re
 import subprocess
@@ -86,11 +93,11 @@ class NarrativePipelineTests(unittest.TestCase):
         rule = rules['rules'][0]
         self.assertEqual(rule['status'], 'model_supported')
         self.assertEqual(rule['support_work_count'], 3)
-        self.assertEqual(rule['source'], 'local_llm_two_pass')
+        self.assertEqual(rule['source'], 'model_two_pass')
         self.assertTrue(fake.prompts[0].startswith('TASK=EXTRACT'))
         self.assertTrue(any(p.startswith('TASK=VERIFY') for p in fake.prompts))
         # Output must contain template prose only, never the fictional source or filenames.
-        exported = ''.join(p.read_text(encoding='utf-8') for p in self.out.iterdir())
+        exported = ''.join(p.read_text(encoding='utf-8') for p in self.out.iterdir() if p.suffix in {'.json', '.md'})
         for sentinel in ('SAMPLE_STORY_TITLE', '古い時計', '主人公はしばらく', 'これまでの推測'):
             self.assertNotIn(sentinel, exported)
         style_cli = SCRIPTS / 'pastiche.py'
@@ -124,7 +131,6 @@ class NarrativePipelineTests(unittest.TestCase):
 
     def test_endpoint_rejects_external_or_redirect_prone_hosts(self):
         for bad in (
-            'https://127.0.0.1:11434/api/generate',
             'http://example.com:11434/api/generate',
             'http://10.0.0.1:11434/api/generate',
             'http://127.0.0.1:11434/api/generate?q=leak',
@@ -134,6 +140,8 @@ class NarrativePipelineTests(unittest.TestCase):
             with self.subTest(bad=bad):
                 with self.assertRaises(ValueError):
                     narrative.validate_endpoint(bad, 'ollama')
+        self.assertEqual(narrative.validate_endpoint('https://127.0.0.1:11434/api/generate', 'ollama'),
+                         'https://127.0.0.1:11434/api/generate')
         self.assertEqual(narrative.validate_endpoint('http://127.0.0.1:11434/api/generate', 'ollama'),
                          'http://127.0.0.1:11434/api/generate')
         self.assertEqual(narrative.validate_endpoint('http://127.0.0.1:8080/v1/chat/completions', 'openai-compatible'),
@@ -154,6 +162,165 @@ class NarrativePipelineTests(unittest.TestCase):
         base['validation_passes'] = 1
         self.assertFalse(pastiche.is_guide_eligible(base))
         self.assertFalse(pastiche.is_guide_eligible({'status': 'hypothesis', 'mechanism': 'FOO'}))
+
+
+    def test_resume_reuses_successful_chunks(self):
+        class FailAtThird(FakeLocalModel):
+            def ask(self, prompt):
+                if prompt.startswith('TASK=EXTRACT') and 'DATA W0003:' in prompt:
+                    raise narrative.ModelRequestError('simulated stall')
+                return super().ask(prompt)
+
+        with self.assertRaisesRegex(ValueError, 'W0003 chunk 1 extract'):
+            narrative.run_pipeline(self.corpus, self.out, FailAtThird(), progress_interval=0)
+        self.assertTrue((self.out / 'narrative_checkpoint.sqlite3').exists())
+        progress = json.loads((self.out / 'narrative_progress.json').read_text(encoding='utf-8'))
+        self.assertEqual(progress['completed_chunks'], 2)
+        self.assertEqual(progress['state'], 'failed')
+
+        fake = FakeLocalModel()
+        summary = narrative.run_pipeline(self.corpus, self.out, fake, progress_interval=0)
+        self.assertEqual(summary['resumed_chunks'], 2)
+        self.assertEqual(len(fake.prompts), 2, 'only third work extraction+verification needed')
+        self.assertEqual(summary['model_supported_rules_count'], 1)
+        again = FakeLocalModel()
+        summary2 = narrative.run_pipeline(self.corpus, self.out, again, progress_interval=0)
+        self.assertEqual(summary2['resumed_chunks'], 3)
+        self.assertEqual(again.prompts, [])
+
+    def test_resume_after_extract_before_verify(self):
+        class FailVerifier(FakeLocalModel):
+            def ask(self, prompt):
+                if prompt.startswith('TASK=VERIFY'):
+                    raise narrative.ModelRequestError('simulated transient verify failure')
+                return super().ask(prompt)
+
+        with self.assertRaisesRegex(ValueError, 'verify'):
+            narrative.run_pipeline(self.corpus, self.out, FailVerifier(), progress_interval=0)
+        con = sqlite3.connect(self.out / 'narrative_checkpoint.sqlite3')
+        entry = json.loads(con.execute('SELECT payload FROM chunks WHERE key=?', ('W0001:C00001',)).fetchone()[0])
+        con.close()
+        self.assertEqual(entry['stage'], 'extracted')
+        fake = FakeLocalModel()
+        narrative.run_pipeline(self.corpus, self.out, fake, progress_interval=0)
+        self.assertTrue(fake.prompts[0].startswith('TASK=VERIFY'), 'extraction should not rerun')
+
+    def test_changed_source_invalidates_matching_chunk_only(self):
+        narrative.run_pipeline(self.corpus, self.out, FakeLocalModel(), progress_interval=0)
+        (self.corpus / 'SAMPLE_STORY_TITLE_1.txt').write_text(
+            (self.corpus / 'SAMPLE_STORY_TITLE_1.txt').read_text(encoding='utf-8') + '新しい情報を確認した。\n',
+            encoding='utf-8')
+        fake = FakeLocalModel()
+        summary = narrative.run_pipeline(self.corpus, self.out, fake, progress_interval=0)
+        self.assertEqual(summary['resumed_chunks'], 2)
+        self.assertEqual(len(fake.prompts), 2)
+
+    def test_retry_only_transient_error(self):
+        class Once(FakeLocalModel):
+            def __init__(self):
+                super().__init__()
+                self.failures = 0
+            def ask(self, prompt):
+                if self.failures == 0:
+                    self.failures += 1
+                    raise narrative.ModelRequestError('simulated HTTP 503')
+                return super().ask(prompt)
+        fake = Once()
+        narrative.run_pipeline(self.corpus, self.out, fake, max_works=1,
+                               retries=1, retry_delay=0, progress_interval=0)
+        self.assertEqual(fake.failures, 1)
+
+    def test_wait_heartbeat_without_stream_tokens(self):
+        class Slow:
+            def ask(self, prompt):
+                time.sleep(0.09)
+                return {}
+        reporter = narrative.ProgressReporter(self.out, interval=0.02)
+        buffer = io.StringIO()
+        with redirect_stderr(buffer):
+            self.assertEqual(reporter.call(Slow(), 'synthetic prompt', 'W0001 EXTRACT'), {})
+        self.assertIn('waiting W0001 EXTRACT', buffer.getvalue())
+        status = json.loads((self.out / 'narrative_progress.json').read_text(encoding='utf-8'))
+        self.assertGreaterEqual(status['elapsed_seconds'], 0)
+        self.assertNotIn('synthetic prompt', buffer.getvalue())
+
+    def test_non_loopback_opt_in_and_transport_rules(self):
+        local = 'http://127.0.0.1:11434/api/generate'
+        lan = 'http://192.168.1.42:11434/api/generate'
+        web_http = 'http://8.8.8.8:11434/api/generate'
+        web_https = 'https://203.0.113.42/v1/chat/completions'
+        self.assertEqual(narrative.validate_endpoint(local, 'ollama'), local)
+        for url in (lan, web_https):
+            with self.assertRaisesRegex(ValueError, '--allow-remote'):
+                narrative.validate_endpoint(url, 'ollama' if url == lan else 'openai-compatible')
+        self.assertEqual(narrative.validate_endpoint(lan, 'ollama', allow_remote=True), lan)
+        self.assertEqual(narrative.validate_endpoint(web_https, 'openai-compatible', allow_remote=True), web_https)
+        with self.assertRaisesRegex(ValueError, '--allow-insecure-http'):
+            narrative.validate_endpoint(web_http, 'ollama', allow_remote=True)
+        self.assertEqual(narrative.validate_endpoint(web_http, 'ollama', True, True), web_http)
+        with patch.dict('os.environ', {'EXAMPLE_TEST_TOKEN': 'secret'}, clear=False):
+            with self.assertRaisesRegex(ValueError, 'HTTPS'):
+                narrative.LocalModel('ollama', 'example', lan, allow_remote=True,
+                                     api_key_env='EXAMPLE_TEST_TOKEN')
+            model = narrative.LocalModel('openai-compatible', 'example', web_https,
+                                         allow_remote=True, api_key_env='EXAMPLE_TEST_TOKEN')
+            self.assertEqual(model.api_key, 'secret')
+        self.assertIsNone(narrative.LocalModel('ollama', 'example', local).timeout)
+
+
+class ProtocolTests(unittest.TestCase):
+    @contextmanager
+    def server(self):
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                return
+            def do_POST(self):
+                req = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                value = '{"events":[],"links":[],"patterns":[]}'
+                head = req.get('stream', False)
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/x-ndjson' if self.path == '/api/generate' else 'text/event-stream')
+                self.end_headers()
+                if not head:
+                    wrapped = ({'response': value} if self.path == '/api/generate' else
+                               {'choices': [{'message': {'content': value}}]})
+                    self.wfile.write(json.dumps(wrapped).encode('utf-8'))
+                    return
+                if self.path == '/api/generate':
+                    for part, done in ((value[:15], False), (value[15:], False), ('', True)):
+                        self.wfile.write(json.dumps({'response': part, 'done': done}).encode('utf-8') + b'\n')
+                else:
+                    for part in (value[:15], value[15:]):
+                        e = {'choices': [{'delta': {'content': part}}]}
+                        self.wfile.write(b'data: ' + json.dumps(e).encode('utf-8') + b'\n\n')
+                    self.wfile.write(b'data: [DONE]\n\n')
+                self.wfile.flush()
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield server.server_address[1]
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
+
+    def test_ollama_stream_json(self):
+        with self.server() as port:
+            for stream in (True, False):
+                m = narrative.LocalModel('ollama', 'fixture', f'http://127.0.0.1:{port}/api/generate', stream=stream)
+                chunks = []
+                m.on_chunk = chunks.append
+                self.assertEqual(m.ask('dummy'), {'events': [], 'links': [], 'patterns': []})
+                if stream:
+                    self.assertEqual(len(chunks), 3)
+
+    def test_chat_completions_sse(self):
+        with self.server() as port:
+            for stream in (True, False):
+                m = narrative.LocalModel('openai-compatible', 'fixture',
+                    f'http://127.0.0.1:{port}/v1/chat/completions', stream=stream)
+                self.assertEqual(m.ask('dummy'), {'events': [], 'links': [], 'patterns': []})
 
 
 if __name__ == '__main__':

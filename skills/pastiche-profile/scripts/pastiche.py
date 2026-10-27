@@ -268,7 +268,7 @@ def drafting_guide(profile: dict[str, Any], notes: dict[str, Any] | None = None)
     rules = (notes or {}).get("rules", [])
     accepted = [r for r in rules if is_guide_eligible(r)]
     lines += ["## Narrative mechanisms — provenance required", "",
-              "These are optional, not copyable plot templates. `model_supported` denotes automated local model agreement and recurrent corpus coding; it is NOT independent verification or author-specificity.", ""]
+              "These are optional, not copyable plot templates. `model_supported` denotes automated model agreement and recurrent corpus coding; it is NOT independent verification or author-specificity.", ""]
     if accepted:
         for r in accepted:
             support = (f"; {r.get('support_work_count')} independent TXT works, model-double-checked"
@@ -281,7 +281,7 @@ def drafting_guide(profile: dict[str, Any], notes: dict[str, Any] | None = None)
 
 def template_notes() -> dict[str, Any]:
     return {"schema": "pastiche.narrative.v1", "rules": [],
-            "instructions": "Add rules manually after local reading: {status: verified, trigger, mechanism, effect, evidence_ids: [local anonymized IDs]}. Do not paste source passages, names, or plot-specific details. Speculative rules must use status: hypothesis."}
+            "instructions": "Add rules manually after local reading: {status: verified, trigger, mechanism, effect, evidence_ids: [local anonymized IDs]}. Do not paste source passages or identifying details. Speculative rules must use status: hypothesis."}
 
 
 def is_guide_eligible(rule: dict[str, Any]) -> bool:
@@ -294,7 +294,7 @@ def is_guide_eligible(rule: dict[str, Any]) -> bool:
     evidence = rule.get("evidence_ids") or []
     distinct_works = {eid.split(":", 1)[0] for eid in evidence
                       if isinstance(eid, str) and re.fullmatch(r"W\d{4}:S\d{4,}", eid)}
-    return (rule.get("source") == "local_llm_two_pass" and rule.get("validation_passes") == 2
+    return (rule.get("source") in {"local_llm_two_pass", "model_two_pass"} and rule.get("validation_passes") == 2
             and type(rule.get("support_work_count")) is int and rule["support_work_count"] >= 2
             and len(distinct_works) >= 2 and len(distinct_works) == rule["support_work_count"])
 
@@ -311,7 +311,7 @@ def load_notes(path: Path | None) -> dict[str, Any] | None:
         if not isinstance(rule, dict) or rule.get("status") not in allowed:
             raise ValueError(f"invalid narrative rule status for {schema}")
         if schema.endswith("v2") and rule.get("status") == "model_supported" and not is_guide_eligible(rule):
-            raise ValueError("unverified auto rule: missing two independent works or local two-pass provenance")
+            raise ValueError("unverified auto rule: missing two supporting works or two-pass provenance")
     return obj
 
 
