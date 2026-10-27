@@ -53,8 +53,8 @@
 ## 3. ローカル推論とデータ境界
 
 - 文体統計：Python標準ライブラリ。任意で [fugashi](https://github.com/polm/fugashi) を使う。
-- ナラティブ解析：[Ollama API](https://github.com/ollama/ollama/blob/main/docs/api.md) または [llama.cpp server](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md) のローカルHTTPを使う。
-- 推論サーバーのアドレスはloopbackのみ。HTTPプロキシやリダイレクトを使わず、外部のモデルAPIへのフォールバックもしない。
+- ナラティブ解析：[Ollama API](https://github.com/ollama/ollama/blob/main/docs/api.md) または [llama.cpp server](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md) のHTTP(S) APIを利用する。
+- 推論サーバーの接続先は利用者が明示したHTTP(S) URLを使う。リバースプロキシのベースパスを保持し、HTTPプロキシやリダイレクトを使わない。
 - 出力には匿名の証拠ID、定量値、固定タグ、固定テンプレートを使う。自由記述の分析結果・作品名・本文は出力しない。
 - 推論結果は使用者のローカルディレクトリに置き、Git管理対象へ追加しない。
 
