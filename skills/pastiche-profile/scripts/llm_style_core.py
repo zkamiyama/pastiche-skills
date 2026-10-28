@@ -115,8 +115,10 @@ def cluster_prompt(dimension: str, panel: list[dict[str, Any]]) -> str:
         "Work across paraphrases and Japanese/English descriptions when the "
         "mechanism really matches. Be conservative: uncertain items stay "
         "singletons, which must NOT appear in groups. "
-        "Return ONLY JSON {\"groups\":[{\"ids\":[\"C0001\",\"C0002\"],"
-        "\"label\":\"短い抽象的な共通手法\"}]}. "
+        'Return ONLY JSON {"groups":[{"ids":['
+        + json.dumps(panel[0]["id"]) + "," + json.dumps(panel[1]["id"])
+        + '],"label":"短い抽象的な共通手法"}]}. '
+
         "Each group must have >=2 different supplied IDs. IDs must appear "
         "at most once across groups. No quotations or names. "
         f"Dimension={dimension}. ITEMS_JSON="
@@ -189,7 +191,9 @@ def review_prompt(dimension: str, candidates: list[dict[str, Any]],
         "A shared genre, emotional topic or vocabulary alone is NOT enough. "
         "Remove nonmatching IDs and reject entirely if there are fewer than "
         "two compatible items. Do not invent an observation. Return ONLY JSON "
-        '{"compatible":true,"accepted_ids":["O00001","O00003"]} '
+        '{"compatible":true,"accepted_ids":['
+        + ",".join(json.dumps(item["id"]) for item in candidates[:2])
+        + ']} '
         "or {\"compatible\":false,\"accepted_ids\":[]}. "
         "No prose. DIMENSION=" + dimension + "; CLAIM=" + label
         + "; ITEMS_JSON=" + json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
@@ -225,7 +229,9 @@ def evidence_prompt(chunk: list[tuple[str, str]], item: dict[str, Any],
         "For style devices assess the stated expression method, not mind-reading. "
         "Return ONLY JSON with {\"supported\":true|false,"
         "\"basis\":\"causal|intentional|rhetorical|temporal_only|unclear\","
-        "\"evidence_ids\":[\"W0001:S0001\",\"W0001:S0002\"]}. "
+        '"evidence_ids":' + json.dumps(item["evidence_ids"][:2])
+        + '}. '
+
         "Use only supplied evidence IDs; no quotations. GROUP=" + group_label
         + "\nITEM=" + json.dumps(public, ensure_ascii=False)
         + "\nDATA:\n" + "\n".join(f"[{eid}] {text}" for eid, text in chunk)
