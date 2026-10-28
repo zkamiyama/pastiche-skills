@@ -161,7 +161,7 @@ def morph_tagger(mode: str):
     except (ImportError, OSError, RuntimeError) as exc:
         if mode == "auto":
             return None
-        raise ValueError("--morphology fugashi requires `pip install 'fugashi[unidic-lite]'`") from exc
+        raise ValueError("--morphology fugashi requires `pip install 'fugashi-plus[unidic-lite]'`") from exc
 
 
 def words(text: str, tagger: Any) -> tuple[Counter[str], Counter[str], int, dict[str, Counter[str]]]:
@@ -542,7 +542,7 @@ def main(argv:list[str]|None=None)->int:
                     f.write(json.dumps(row,ensure_ascii=False)+"\n")
         else:
             (out / "lexical_inventory.jsonl").unlink(missing_ok=True)
-            print("[lexical] Vocabulary inventory unavailable: install pip install 'fugashi[unidic-lite]'",file=sys.stderr)
+            print("[lexical] Vocabulary inventory unavailable: install pip install 'fugashi-plus[unidic-lite]'",file=sys.stderr)
         (out/"lexical_bible.md").write_text(private_guide(stats,args.include_words_in_guide),encoding="utf-8")
         print(f"Lexical analysis complete: {stats['works']} works; tokenizer={stats['morphology']}")
         print("Full vocabulary inventory is PRIVATE; small exact forms are present in profiles. Review before sharing.")

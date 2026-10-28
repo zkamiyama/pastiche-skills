@@ -106,6 +106,8 @@ def main(argv=None):
     parser.add_argument("--progress-interval", type=float, default=15)
     parser.add_argument("--variants",type=Path,help="exact variant pairs: JSON array of [A,B]")
     parser.add_argument("--morphology",choices=("auto","none","fugashi"),default="auto")
+    parser.add_argument("--no-auto-install", action="store_true",
+                        help="skip first-run Japanese dictionary setup; full vocabulary may be unavailable")
     parser.add_argument("--reference",type=Path,help="genre-matched reference TXT corpus for descriptive lexical contrast")
     parser.add_argument("--include-words-in-guide",action="store_true",help="also include frequent short lexical forms in private guide")
     parser.add_argument("--lexical-review-limit",type=int,default=96,
@@ -221,4 +223,14 @@ def main(argv=None):
         return 2
 
 if __name__ == "__main__":
+    # Skills CLI only copies files. First real use can initialize an isolated
+    # Python environment; avoid modifying system and agent Python packages.
+    from bootstrap import bootstrap_entrypoint
+    try:
+        bootstrap_entrypoint(Path(__file__).resolve(), sys.argv[1:])
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+        print(f"error: first-run dependency setup failed: {exc}. "
+              "Use --no-auto-install --morphology none for a reduced analysis.",
+              file=sys.stderr, flush=True)
+        raise SystemExit(2)
     raise SystemExit(main())

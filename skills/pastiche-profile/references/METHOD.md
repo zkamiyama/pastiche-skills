@@ -33,3 +33,10 @@ The full inventory remains local. The default shortlist (96 forms, in batches of
 - [LLMs and human psycholinguistic norms (2024)](https://link.springer.com/article/10.3758/s13428-024-02337-z): model linguistic norms can be useful proxies but require validation.
 
 These methods support the design, not a demonstrated guarantee of any particular style imitation result.
+
+## Tokenizer distribution
+
+- The preferred parser is [fugashi-plus](https://github.com/tsukumijima/fugashi-plus), a compatible fork imported using `from fugashi import Tagger`.
+- The first-run bootstrap installs `fugashi-plus[unidic-lite]` in a dedicated, versioned virtual environment. This avoids a collision with upstream `fugashi`, which exports the same import namespace.
+- The switch improves dictionary handling and platform support, **not guaranteed segmentation accuracy or runtime speed**.
+- Exact Unicode variants, punctuation and repeated symbols are measured from the original unnormalized string, independently of morphological tokenization.
