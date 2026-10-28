@@ -91,6 +91,20 @@ python3 -u skills/pastiche-profile/scripts/run.py /path/to/corpus \
 
 中断したら**同じコマンドで再実行**してください。処理済みチャンクと語彙評価バッチはSQLiteに残ります。`--restart` を指定したときのみ対応チェックポイントを破棄します。`--timeout 0` が既定で、モデルの待機時間上限は設けません（実行環境側の制限とは別）。15秒ごとに状態を報告します。
 
+
+## 執筆後の表記・語彙チェック（pastiche-write）
+
+`pastiche-write` は統合済みの `style_bible.md` から文体・表記・物語構造を参照します。追加依存は不要で、次のコマンドは**元コーパスを読まず**に新しい原稿と `lexical_profile.json` を比較します。
+
+```bash
+python3 skills/pastiche-write/scripts/evaluate_lexical.py \
+  --profile /path/to/.pastiche-private/profile/lexical_profile.json \
+  --draft /path/to/new-draft.txt \
+  --out /path/to/.pastiche-private/write_lexical_review.json
+```
+
+記号（♡・♪・☆など）の頻度と会話内の位置、連打長、混合記号列、顔文字候補、表記ペア（「じゃねえか／じゃあねえか」「来たっ！／来たッ！」）、短い文末表現を比較します。数値は文脈を考えて解釈するための参考で、機械的な置換や回数の強制には使いません。
+
 ## Agent Skillsでの利用
 
 ```bash
