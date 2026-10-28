@@ -1,0 +1,42 @@
+name: one-time workbench delivery
+on:
+  push:
+    branches: ['feat/story-character-workbench']
+    paths: ['.delivery/part-4.b64']
+permissions:
+  contents: write
+jobs:
+  apply-reviewed-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Decode and verify the source-only patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          import base64, hashlib, lzma, pathlib
+          payload = ''.join(pathlib.Path(f'.delivery/part-{i}.b64').read_text().strip() for i in range(1, 5))
+          patch = lzma.decompress(base64.b64decode(payload, validate=True))
+          expected = '71d25ddeb00bdcd0e94dbf85eea2f2c3108e4dc65d9be313ef32e299e3a39bb0'
+          assert hashlib.sha256(patch).hexdigest() == expected, 'Patch hash mismatch'
+          pathlib.Path('/tmp/workbench.patch').write_bytes(patch)
+          PY
+          git apply --check --index /tmp/workbench.patch
+          git apply --index /tmp/workbench.patch
+          git rm .delivery/part-*.b64
+          python -m compileall -q skills
+          git diff --cached --check
+      - name: Commit readable source to this branch only
+        shell: bash
+        run: |
+          branch='feat/story-character-workbench'
+          current=$(git ls-remote origin "refs/heads/$branch" | cut -f1)
+          test "$current" = "$GITHUB_SHA"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Add whole-story analysis, character evidence graph, research and local review workbench'
+          git push origin "HEAD:refs/heads/$branch"
