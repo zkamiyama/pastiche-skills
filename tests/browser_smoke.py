@@ -53,6 +53,7 @@ def main():
                 # Locator assertions work with script-src 'self'; do not relax CSP.
                 expect(page.locator('#message')).to_contain_text('判断を履歴')
                 page.get_by_role('button', name='執筆用に出力', exact=True).click()
+                expect(page.locator('#message')).to_contain_text('主張 0件')
                 context = json.loads((out / 'writer_context.json').read_text(encoding='utf-8'))
                 assert context['characters']['claims'] == []
 
@@ -60,6 +61,7 @@ def main():
                 page.get_by_role('button', name='確認済みにする', exact=True).click()
                 expect(page.locator('#message')).to_contain_text('判断を履歴')
                 page.get_by_role('button', name='執筆用に出力', exact=True).click()
+                expect(page.locator('#message')).to_contain_text('主張 1件')
                 context = json.loads((out / 'writer_context.json').read_text(encoding='utf-8'))
                 assert [c['status'] for c in context['characters']['claims']] == ['human_approved']
                 store = Store(out / 'character_graph.sqlite3')
