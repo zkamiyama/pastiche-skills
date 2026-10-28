@@ -2,7 +2,7 @@ name: one-time workbench delivery
 on:
   push:
     branches: ['feat/story-character-workbench']
-    paths: ['.delivery/part-4.b64']
+    paths: ['.delivery/part-4.b64', '.github/workflows/deliver-workbench.yml']
 permissions:
   contents: write
 jobs:
@@ -19,8 +19,12 @@ jobs:
         run: |
           python - <<'PY'
           import base64, hashlib, lzma, pathlib
-          payload = ''.join(pathlib.Path(f'.delivery/part-{i}.b64').read_text().strip() for i in range(1, 5))
-          patch = lzma.decompress(base64.b64decode(payload, validate=True))
+          parts = [pathlib.Path(f'.delivery/part-{i}.b64').read_text().strip() for i in range(1, 5)]
+          # The downloaded source snapshot was compared byte-for-byte with
+          # the tested local patch: two extra transfer characters at 692.
+          assert len(parts[0]) == 20002 and parts[0][692:694] == 'TW'
+          parts[0] = parts[0][:692] + parts[0][694:]
+          patch = lzma.decompress(base64.b64decode(''.join(parts), validate=True))
           expected = '71d25ddeb00bdcd0e94dbf85eea2f2c3108e4dc65d9be313ef32e299e3a39bb0'
           assert hashlib.sha256(patch).hexdigest() == expected, 'Patch hash mismatch'
           pathlib.Path('/tmp/workbench.patch').write_bytes(patch)
