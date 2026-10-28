@@ -59,7 +59,7 @@
 
 ## 自動化の厳密な意味とプライバシー
 
-- **構造解析にはLLMが必要**。Ollama (`/api/generate`) またはOpenAI互換API (`/v1/chat/completions`) を、指定したHTTP(S)エンドポイントで使う。ベースURL（例：`/llm/v1`）は`run.py`でフルAPIパスへ補完する。利用者が指定したモデルサーバーに原文チャンクを転送するため、送信先を確認する。明示的なURLの指定が通信先への同意となり、CLIの追加の許可フラグは不要。HTTP自体は暗号化されない。リダイレクト禁止・環境プロキシ無効・HTTPS証明書検証あり。
+- **構造解析にはLLMが必要**。Ollama (`/api/generate`) またはOpenAI互換API (`/v1/chat/completions`) を、指定したHTTP(S)エンドポイントで使う。デフォルトは127.0.0.1。APIベースURLに `/llm/v1` などのプレフィックスがあっても、そのまま指定すれば `/chat/completions` が補完される。ユーザーが指定した接続先に原文チャンクが送られる。追加の接続許可フラグは不要。HTTPは単体では暗号化されない。リダイレクト禁止・環境プロキシ無効・HTTPS証明書検証あり。
 - 本文を扱うのはコーパスを読めるPython処理と指定のモデルサーバー。外部ホストを明示した場合はそのサーバーにチャンクを転送するが、GitHubへ本文をコミットしない。エージェントが利用者のPCへアクセスできなければ実行コマンドを渡す。
 - `narrative_rules.json` は有限タグ・固定辞書による日本語文・出典の匿名セグメントID・集約数値のみ。LLM生成の自由記述、引用、本文、ファイル名は保存しない。ただし抽象的な情報であっても共有前に内容を確認する。
 - ローカル推論環境のモデル/サービスの利用条件も別途確認する。モデルの利用許諾や既存著作物の再現許可をこのSkillが与えるわけではない。
@@ -76,3 +76,19 @@
 - エージェントのシェル実行時間制限は通信タイムアウトと別。長時間セッションか切断後の再実行を前提とし、ステータス確認なしに「失敗したので最初から」と案内しない。
 
 API仕様の参照：[Ollama API (streaming)](https://docs.ollama.com/api/generate)、[OpenAI Chat Completion streaming events](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events)。
+
+## Fast narrative discovery (optional alternative to full extraction)
+
+The default orchestration (`run.py --mode fast`) uses `scripts/narrative_fast.py`.
+It is not the same method as the legacy per-chunk event graph extraction.
+
+1. Full-corpus stylometry and lexical extraction happen *without* model requests.
+2. Select up to 18 works evenly by ordered file index, then up to two chunks from different regions of each selected work. For each selected chunk, request up to three **freely described** reusable narrative techniques with trigger, mechanism, effect, evidence segment IDs, relation basis and category.
+3. Strip verbatim source fragments, reject evidence IDs not present in the chunk and reject merely chronological relations.
+4. Group near-duplicate descriptions within categories using string similarity. This is an inexpensive heuristic; paraphrased equivalent mechanisms can split, and superficially similar ones can merge. It is not semantic clustering or evidence of author-specific technique.
+5. Re-read source text only for proposals that appear in multiple independent work IDs, up to eight groups by default, and only for the minimum evidence-supporting works. The second request is a model re-check, not a human judgment.
+6. Record hypotheses separately from `model_supported` proposals. Two supporting model passes and recurrence are screening rules, not literary proof.
+
+**Call budget**: default selected extraction requests <= 18*2=36 plus verification requests <= 8*2=16 (and the separate lexical impression batches), instead of the full method's possible twice-per-chunk requests. Note that model latency and output token count vary. Use `--mode full` for exhaustive analysis, accepting the added cost. `--narrative-works 0` considers all works but still samples chunks; `--chunks-per-work N` increases coverage.
+
+References: [GLUCOSE](https://aclanthology.org/2020.emnlp-main.370/); [A survey on narrative extraction from textual data](https://link.springer.com/article/10.1007/s10462-022-10338-7). These references motivate event-grounded causal distinctions, not the specific sampling and grouping heuristic.

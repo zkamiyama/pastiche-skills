@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Narrative-pattern extraction with explicit model-endpoint selection.
+"""Narrative-pattern extraction with simple model-endpoint selection.
 
 Original texts are sent only to the endpoint selected by the operator. Checkpoints,
 progress snapshots and final profiles contain IDs, counts and finite labels only.
@@ -84,6 +84,7 @@ def render_rule(trigger: str, operation: str, effect: str) -> tuple[str, str, st
 
 PRIVATE_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
     "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16",
+    "100.64.0.0/10",  # shared address space, e.g. overlay networks
     "fc00::/7", "fe80::/10",
 ))
 MAX_RESPONSE_CHARS = 2_000_000
@@ -99,26 +100,139 @@ def _endpoint_scope(host: str) -> tuple[bool, bool]:
     return address.is_loopback, any(address in n for n in PRIVATE_NETWORKS)
 
 
+def select_backend(url: str | None, requested: str = "auto") -> str:
+    """Infer the API protocol from a supplied path, without probing the source data."""
+    if requested != "auto":
+        return requested
+    if not url:
+        return "ollama"
+    parsed = urllib.parse.urlsplit(url)
+    path = parsed.path.rstrip("/")
+    if path.endswith("/api/generate") or path.endswith("/api") or parsed.port == 11434:
+        return "ollama"
+    return "openai-compatible"
+
+
 def validate_endpoint(url: str, backend: str, allow_remote: bool = False,
                       allow_insecure_http: bool = False) -> str:
-    """Validate a user-selected endpoint. Explicit consent is needed off loopback."""
+    """Accept a user-supplied API base URL or full inference URL.
+
+    The URL supplied by the operator selects the destination; no separate
+    network-permission flags are required. Obsolete flags remain accepted for
+    existing scripts, but never override malformed URLs or redirect blocking.
+    """
+    if not url or any(ord(ch) < 33 or ord(ch) == 127 for ch in url):
+        raise ValueError("--endpoint must be an HTTP(S) URL without whitespace/control characters")
     parsed = urllib.parse.urlsplit(url)
-    desired = "/api/generate" if backend == "ollama" else "/v1/chat/completions"
     try:
         port = parsed.port
     except ValueError as exc:
         raise ValueError("invalid endpoint port") from exc
     if (parsed.scheme not in {"http", "https"} or not parsed.hostname
         or parsed.username is not None or parsed.password is not None
-        or parsed.query or parsed.fragment or not parsed.path.endswith(desired)
+        or parsed.query or parsed.fragment
+        or any(piece in {".", ".."} for piece in parsed.path.split("/"))
+        or "//" in parsed.path
         or (port is not None and not 1 <= port <= 65535)):
-        raise ValueError(f"endpoint must be http(s)://host[:port]{desired} without credentials/query")
-    loopback, private_ip = _endpoint_scope(parsed.hostname)
-    if not loopback and not allow_remote:
-        raise ValueError("non-loopback endpoint requires --allow-remote; source chunks will be sent to that server")
-    if not loopback and not private_ip and parsed.scheme == "http" and not allow_insecure_http:
-        raise ValueError("HTTP outside local/private IP networks requires --allow-insecure-http (HTTPS recommended)")
-    return url
+        raise ValueError("invalid endpoint URL (use HTTP(S), no userinfo, query, fragment or path traversal)")
+
+    path = parsed.path.rstrip("/")
+    if backend == "ollama":
+        if path.endswith("/api/generate"):
+            final_path = path
+        elif path.endswith("/api"):
+            final_path = path + "/generate"
+        elif not path:
+            final_path = path + "/api/generate"
+        else:
+            raise ValueError("Ollama URL must be a server root or end in /api or /api/generate")
+    elif backend == "openai-compatible":
+        if path.endswith("/v1/chat/completions"):
+            final_path = path
+        elif path.endswith("/v1"):
+            final_path = path + "/chat/completions"
+        elif not path:
+            final_path = "/v1/chat/completions"
+        else:
+            raise ValueError("OpenAI-compatible URL must end in /v1 or /v1/chat/completions")
+    else:
+        raise ValueError("--backend must be auto, ollama or openai-compatible")
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, final_path, "", ""))
+
+
+def inference_base_url(endpoint: str, backend: str) -> str:
+    """Derive the OpenAI-compatible baseURL without stripping proxy prefixes."""
+    suffix = "/chat/completions" if backend == "openai-compatible" else "/api/generate"
+    return endpoint[:-len(suffix)] if endpoint.endswith(suffix) else endpoint
+
+
+def _model_ids_from_pi_config(endpoint: str, backend: str, config_path: Path | None = None) -> list[str]:
+    """Read model IDs from Pi's own configuration; never include keys in output."""
+    source = config_path or Path(os.environ.get("PASTICHE_PI_MODELS_PATH", str(Path.home() / ".pi/agent/models.json")))
+    if not source.is_file():
+        return []
+    try:
+        config = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return []
+    providers = config.get("providers", {}) if isinstance(config, dict) else {}
+    expected = inference_base_url(endpoint, backend).rstrip("/")
+    models: list[str] = []
+    for provider in providers.values() if isinstance(providers, dict) else []:
+        if not isinstance(provider, dict) or not isinstance(provider.get("baseUrl"), str):
+            continue
+        try:
+            provider_url = validate_endpoint(provider["baseUrl"], backend)
+        except ValueError:
+            continue
+        if inference_base_url(provider_url, backend).rstrip("/") != expected:
+            continue
+        for model in provider.get("models", []):
+            if isinstance(model, dict) and isinstance(model.get("id"), str) and model["id"]:
+                models.append(model["id"])
+    return sorted(set(models))
+
+
+def _model_ids_from_server(endpoint: str, backend: str, *, api_key: str | None = None,
+                           timeout: float = 8.0) -> list[str]:
+    """Best-effort metadata-only discovery, with no corpus sent to the server."""
+    base = inference_base_url(endpoint, backend)
+    models_url = base + ("/models" if backend == "openai-compatible" else "/api/tags")
+    headers = {"Accept": "application/json"}
+    if api_key:
+        headers["Authorization"] = "Bearer " + api_key
+    request = urllib.request.Request(models_url, headers=headers, method="GET")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            reply = response.read(1_000_001)
+            if len(reply) > 1_000_000:
+                return []
+        data = json.loads(reply)
+    except (OSError, ValueError, TypeError):
+        return []
+    models = data.get("data" if backend == "openai-compatible" else "models", []) if isinstance(data, dict) else []
+    return sorted(set(v for item in models if isinstance(item, dict)
+                      for v in [item.get("id" if backend == "openai-compatible" else "name")]
+                      if isinstance(v, str) and v))
+
+
+def resolve_model_name(model: str | None, endpoint: str, backend: str,
+                       *, pi_config_path: Path | None = None,
+                       api_key: str | None = None) -> tuple[str, str]:
+    """Never guess a public model ID; prefer the operator's Pi configuration."""
+    if model:
+        return model, "explicit"
+    from_pi = _model_ids_from_pi_config(endpoint, backend, pi_config_path)
+    if len(from_pi) == 1:
+        return from_pi[0], "pi-config"
+    from_server = _model_ids_from_server(endpoint, backend, api_key=api_key)
+    if len(from_server) == 1:
+        return from_server[0], "server-models"
+    available = from_server or from_pi
+    if available:
+        raise ValueError("multiple model IDs found: " + ", ".join(available[:10]) + "; specify --model")
+    raise ValueError("model ID unavailable: specify --model (e.g. --model el-local), or configure the matching Pi models.json")
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -718,11 +832,14 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Narrative rule extraction with resumable chunks and configurable model endpoint")
     ap.add_argument("corpus", type=Path)
     ap.add_argument("--out", type=Path, default=Path(".pastiche-private/profile"))
-    ap.add_argument("--backend", choices=("ollama", "openai-compatible"), default="ollama")
-    ap.add_argument("--model", default=os.environ.get("PASTICHE_LOCAL_MODEL"), help="model ID at selected endpoint")
-    ap.add_argument("--endpoint", help="HTTP(S) model endpoint; defaults to 127.0.0.1; specify --allow-remote for other hosts")
-    ap.add_argument("--allow-remote", action="store_true", help="send source chunks to an endpoint outside this machine")
-    ap.add_argument("--allow-insecure-http", action="store_true", help="permit cleartext HTTP to a non-private remote host")
+    ap.add_argument("--backend", choices=("auto", "ollama", "openai-compatible"), default="auto",
+                    help="API type (default: detect from URL; localhost Ollama if omitted)")
+    ap.add_argument("--model", default=os.environ.get("PASTICHE_LOCAL_MODEL"),
+                    help="optional model ID; otherwise use Pi models.json or endpoint /models")
+    ap.add_argument("--endpoint", "--api-base", dest="endpoint",
+                    help="API base URL (e.g. http://host/llm/v1) OR full completions URL")
+    ap.add_argument("--allow-remote", action="store_true", help=argparse.SUPPRESS)  # legacy no-op
+    ap.add_argument("--allow-insecure-http", action="store_true", help=argparse.SUPPRESS)  # legacy no-op
     ap.add_argument("--api-key-env", help="environment variable containing bearer token; remote authenticated API requires HTTPS")
     ap.add_argument("--no-stream", action="store_true", help="fallback for APIs that do not implement streaming")
     ap.add_argument("--min-chars", type=int, default=80)
@@ -735,19 +852,43 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--retry-delay", type=float, default=2.0, help="initial exponential backoff seconds (default: 2)")
     ap.add_argument("--progress-interval", type=float, default=15.0, help="waiting heartbeat seconds; 0 disables heartbeat")
     ap.add_argument("--restart", action="store_true", help="ignore any previous checkpoint and reprocess all chunks")
+    ap.add_argument("--check", action="store_true", help="connection check using synthetic JSON only; do not read corpus")
     args = ap.parse_args(argv)
     try:
         if (args.min_chars < 1 or args.chunk_chars < 1100 or args.min_works < 2
             or args.max_works < 0 or args.max_rules < 1 or args.timeout < 0
             or args.retries < 0 or args.retry_delay < 0 or args.progress_interval < 0):
             raise ValueError("invalid limits: chunk-chars>=1100, min-works>=2, timeout/retries/interval >=0")
-        if not args.model:
-            raise ValueError("--model is required: choose a model available at the selected endpoint")
-        endpoint = args.endpoint or ("http://127.0.0.1:11434/api/generate" if args.backend == "ollama"
-                                     else "http://127.0.0.1:8080/v1/chat/completions")
-        model = LocalModel(args.backend, args.model, endpoint, args.timeout,
+        backend = select_backend(args.endpoint, args.backend)
+        endpoint = validate_endpoint(args.endpoint or (
+            "http://127.0.0.1:11434" if backend == "ollama" else "http://127.0.0.1:8080/v1"), backend)
+        key = None
+        if args.api_key_env:
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.api_key_env):
+                raise ValueError("invalid --api-key-env name")
+            key = os.environ.get(args.api_key_env)
+            if not key:
+                raise ValueError("--api-key-env is set but the environment variable is unset")
+            url = urllib.parse.urlsplit(endpoint)
+            if url.scheme != "https" and not _endpoint_scope(url.hostname or "")[0]:
+                raise ValueError("API-key authentication outside localhost requires HTTPS")
+        name, model_origin = resolve_model_name(args.model, endpoint, backend, api_key=key)
+        model = LocalModel(backend, name, endpoint, args.timeout,
                            args.allow_remote, args.allow_insecure_http,
                            args.api_key_env, not args.no_stream)
+        print(f"[pastiche] API: {backend} | model: {name} ({model_origin}) | endpoint: {endpoint}",
+              file=sys.stderr, flush=True)
+        parsed = urllib.parse.urlsplit(endpoint)
+        if not _endpoint_scope(parsed.hostname or "")[0]:
+            print("[pastiche] Source chunks will be sent to the selected model server. "
+                  + ("HTTP is not encrypted." if parsed.scheme == "http" else ""),
+                  file=sys.stderr, flush=True)
+        if args.check:
+            reply = model.ask('Reply with JSON: {"ok":true}. No source document is included.')
+            if not isinstance(reply, dict):
+                raise ValueError("model connection test returned non-JSON")
+            print("Model connection OK; synthetic JSON test completed; no corpus read.")
+            return 0
         audit = run_pipeline(args.corpus, args.out, model, args.min_chars, args.chunk_chars,
                              args.min_works, args.max_rules, args.max_works,
                              resume=not args.restart, retries=args.retries,

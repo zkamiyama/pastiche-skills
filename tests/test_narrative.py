@@ -19,6 +19,7 @@ import unittest
 SCRIPTS = Path(__file__).resolve().parents[1] / 'skills' / 'pastiche-profile' / 'scripts'
 sys.path.insert(0, str(SCRIPTS))
 import narrative  # noqa: E402
+import run  # noqa: E402
 
 
 class FakeLocalModel:
@@ -129,13 +130,14 @@ class NarrativePipelineTests(unittest.TestCase):
             narrative.run_pipeline(self.corpus, self.out, FakeLocalModel('bad_json'))
         self.assertFalse((self.out / 'narrative_rules.json').exists())
 
-    def test_endpoint_rejects_external_or_redirect_prone_hosts(self):
+    def test_endpoint_rejects_unsafe_url_parts(self):
         for bad in (
-            'http://example.com:11434/api/generate',
-            'http://10.0.0.1:11434/api/generate',
             'http://127.0.0.1:11434/api/generate?q=leak',
             'http://user@localhost:11434/api/generate',
             'http://localhost:11434/evil',
+            'http://localhost:11434/../api/generate',
+            'file:///v1/chat/completions',
+            'http://127.0.0.1:11434/api/generate#fragment',
         ):
             with self.subTest(bad=bad):
                 with self.assertRaises(ValueError):
@@ -146,6 +148,11 @@ class NarrativePipelineTests(unittest.TestCase):
                          'http://127.0.0.1:11434/api/generate')
         self.assertEqual(narrative.validate_endpoint('http://127.0.0.1:8080/v1/chat/completions', 'openai-compatible'),
                          'http://127.0.0.1:8080/v1/chat/completions')
+        self.assertEqual(narrative.validate_endpoint('http://example.test/llm/v1', 'openai-compatible'),
+                         'http://example.test/llm/v1/chat/completions')
+        self.assertEqual(narrative.validate_endpoint('http://example.test/llm/v1/chat/completions', 'openai-compatible'),
+                         'http://example.test/llm/v1/chat/completions')
+        self.assertEqual(narrative.select_backend('http://example.test/llm/v1'), 'openai-compatible')
 
     def test_guide_rejects_tampered_claims(self):
         import pastiche
@@ -244,19 +251,18 @@ class NarrativePipelineTests(unittest.TestCase):
         self.assertGreaterEqual(status['elapsed_seconds'], 0)
         self.assertNotIn('synthetic prompt', buffer.getvalue())
 
-    def test_non_loopback_opt_in_and_transport_rules(self):
+    def test_non_loopback_explicit_url_and_api_key_transport(self):
         local = 'http://127.0.0.1:11434/api/generate'
         lan = 'http://192.168.1.42:11434/api/generate'
         web_http = 'http://8.8.8.8:11434/api/generate'
         web_https = 'https://203.0.113.42/v1/chat/completions'
         self.assertEqual(narrative.validate_endpoint(local, 'ollama'), local)
         for url in (lan, web_https):
-            with self.assertRaisesRegex(ValueError, '--allow-remote'):
-                narrative.validate_endpoint(url, 'ollama' if url == lan else 'openai-compatible')
+            self.assertEqual(narrative.validate_endpoint(url,
+                'ollama' if url == lan else 'openai-compatible'), url)
         self.assertEqual(narrative.validate_endpoint(lan, 'ollama', allow_remote=True), lan)
         self.assertEqual(narrative.validate_endpoint(web_https, 'openai-compatible', allow_remote=True), web_https)
-        with self.assertRaisesRegex(ValueError, '--allow-insecure-http'):
-            narrative.validate_endpoint(web_http, 'ollama', allow_remote=True)
+        self.assertEqual(narrative.validate_endpoint(web_http, 'ollama'), web_http)
         self.assertEqual(narrative.validate_endpoint(web_http, 'ollama', True, True), web_http)
         with patch.dict('os.environ', {'EXAMPLE_TEST_TOKEN': 'secret'}, clear=False):
             with self.assertRaisesRegex(ValueError, 'HTTPS'):
@@ -267,6 +273,20 @@ class NarrativePipelineTests(unittest.TestCase):
             self.assertEqual(model.api_key, 'secret')
         self.assertIsNone(narrative.LocalModel('ollama', 'example', local).timeout)
 
+    def test_model_selection_uses_matching_pi_config_without_network(self):
+        config_path = self.root / 'models.json'
+        config_path.write_text(json.dumps({'providers': {
+            'internal-llm': {'baseUrl': 'http://example.test/llm/v1',
+                             'api': 'openai-completions', 'apiKey': 'unused',
+                             'models': [{'id': 'el-local'}]},
+            'unrelated': {'baseUrl': 'http://other.test/v1',
+                          'models': [{'id': 'something-else'}]}}}), encoding='utf-8')
+        full = narrative.validate_endpoint('http://example.test/llm/v1', 'openai-compatible')
+        self.assertEqual(narrative.resolve_model_name(None, full, 'openai-compatible',
+                                                     pi_config_path=config_path), ('el-local', 'pi-config'))
+        self.assertEqual(narrative.resolve_model_name('manual-id', full, 'openai-compatible',
+                                                     pi_config_path=config_path), ('manual-id', 'explicit'))
+
 
 class ProtocolTests(unittest.TestCase):
     @contextmanager
@@ -274,7 +294,19 @@ class ProtocolTests(unittest.TestCase):
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args):
                 return
+            def do_GET(self):
+                if self.path != '/llm/v1/models':
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'data': [{'id': 'el-local'}]}).encode('utf-8'))
             def do_POST(self):
+                if self.path not in ('/api/generate', '/v1/chat/completions',
+                                     '/llm/v1/chat/completions'):
+                    self.send_error(404)
+                    return
                 req = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 value = '{"events":[],"links":[],"patterns":[]}'
                 head = req.get('stream', False)
@@ -321,6 +353,41 @@ class ProtocolTests(unittest.TestCase):
                 m = narrative.LocalModel('openai-compatible', 'fixture',
                     f'http://127.0.0.1:{port}/v1/chat/completions', stream=stream)
                 self.assertEqual(m.ask('dummy'), {'events': [], 'links': [], 'patterns': []})
+
+    def test_prefixed_api_base_and_auto_discovery(self):
+        with self.server() as port:
+            base = f'http://127.0.0.1:{port}/llm/v1'
+            url = narrative.validate_endpoint(base, 'openai-compatible')
+            self.assertEqual(url, base + '/chat/completions')
+            # No Pi config; the metadata endpoint advertises exactly one model.
+            chosen = narrative.resolve_model_name(None, url, 'openai-compatible',
+                                                  pi_config_path=Path('/does-not-exist/models.json'))
+            self.assertEqual(chosen, ('el-local', 'server-models'))
+            model = narrative.LocalModel('openai-compatible', chosen[0], base)
+            self.assertEqual(model.ask('dummy'), {'events': [], 'links': [], 'patterns': []})
+
+    def test_one_command_workflow_and_connection_only_check(self):
+        with self.server() as port, tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            corpus = root / 'corpus'
+            corpus.mkdir()
+            for index in range(2):
+                text = ('昔、ある人物は手紙の意味を勘違いした。別の出来事が見方を変えた。\n' * 8)
+                (corpus / f'fiction_{index}.txt').write_text(text, encoding='utf-8')
+            base = f'http://127.0.0.1:{port}/llm/v1'
+            out = root / 'output'
+            # A check must not try to read the missing corpus folder.
+            self.assertEqual(run.main([str(root / 'missing'), '--api-base', base, '--check']), 0)
+            cmd = [str(corpus), '--api-base', base, '--out', str(out), '--progress-interval', '0']
+            self.assertEqual(run.main(cmd), 0)
+            for name in ('style_profile.json', 'narrative_rules.json', 'style_bible.md',
+                         'narrative_fast_checkpoint.sqlite3', 'narrative_progress.json',
+                         'lexical_profile.json', 'lexical_candidates.json', 'lexical_bible.md'):
+                self.assertTrue((out / name).exists(), name)
+            self.assertEqual(run.main(cmd), 0, 'second run should reuse completed chunks')
+            rules = json.loads((out / 'narrative_rules.json').read_text(encoding='utf-8'))
+            self.assertEqual(rules['model_name'], 'el-local')
+            self.assertEqual(json.loads((out / 'narrative_audit.json').read_text(encoding='utf-8'))['restored_extract_chunks'], 2)
 
 
 if __name__ == '__main__':
