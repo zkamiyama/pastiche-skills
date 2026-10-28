@@ -1,136 +1,123 @@
 # pastiche-skills
 
-日本語TXTコーパスから **文体・語彙・表記・物語構造** のプロファイルを作り、新しい題材の執筆に使う Agent Skills です。原文をリポジトリに置く必要はありません。Python 3.10以降。
+日本語の TXT コーパスを、**全文の決定論的計測 + 根拠付き LLM 質的分析**で作風ガイドに変換し、別の人物・題材・筋書きでの新規執筆を支援する Agent Skills です。Python 3.10 以降。利用者の原文を GitHub に置く必要はありません。
 
-`pastiche-profile` は全文の統計をローカルで計測し、必要な場面だけモデルに送って構成技法を抽出します。`pastiche-write` は生成されたガイドを使って、独立した人物・設定・プロットで執筆します。
+標準の `--mode llm` は、これまでの文字列類似度だけによるナラティブ分類を使いません。場面単位で語彙・情感・語り口・台詞・感覚・テンポ・物語構造を観察し、LLM が共通技法をグループ化してから、グループの整合性と原文根拠を再検査します。**同じ語彙やテーマの共有だけでは同一技法とみなしません。**
 
-## 最初の1コマンド
+## クイックスタート
 
 ```bash
 python3 -u skills/pastiche-profile/scripts/run.py "/path/to/corpus" \
   --api-base "http://model-server.example/llm/v1" \
-  --out "/path/to/.pastiche-private/profile"
+  --out "/path/to/.pastiche-private/profile" \
+  --llm-workers 2
 ```
 
-- `/path/to/corpus` はTXTファイルが入ったフォルダです（UTF-8またはCP932）。
-- APIのベースURLをそのまま指定します。`/llm/v1` のようなプレフィックスも保持します。スクリプトが `/chat/completions` を補います。
-- `~/.pi/agent/models.json` に同じベースURLのモデルが1つあれば自動選択します。それ以外では `/models` から調べます。複数モデルがあれば `--model MODEL_ID` を指定してください。
-- 接続先が別のPCでも利用できます。**そのサーバーには物語解析用の本文チャンクと、短い語形の評価候補が送られます。** HTTP自体は暗号化されないので、送信先とネットワークを確認してください。
-- `--check` は合成データのみで接続テストし、コーパスを開きません。
-- 標準モード `fast` は一部の作品・場面から構造を探索するため、従来の全チャンク二重解析よりLLM呼び出しを減らせます。実際の所要時間・作風再現性はモデルと資料に依存します。
+- TXT を含むフォルダを渡します（UTF-8 / CP932）。`--out` は Git 管理外の非公開フォルダを推奨します。
+- OpenAI 互換 API のパス接頭辞は保持され、`/v1` に `/chat/completions` を補います。Ollama の `/api/generate` にも対応します。
+- `~/.pi/agent/models.json` に同一ベース URL のモデルが一つあれば自動選択します。それ以外は `/models` を参照し、複数あれば `--model MODEL_ID` が必要です。
+- リモートに指定したモデルサーバーには、**サンプルした原文チャンクと短い語彙候補を送信します**。HTTP は暗号化されないため、信頼できるネットワークで使ってください。`--api-key-env` は環境変数名を指定します。認証つきリモート接続は HTTPS を使用してください。
+- `--check` は合成 JSON のみで通信テストし、コーパスを読みません。
+- 初回のみ必要なら `fugashi-plus[unidic-lite]` を専用キャッシュ venv に導入します。`npx skills add` 自体にインストールフックはありません。導入できない場合は `--no-auto-install --morphology none` で全文語彙一覧なしの縮退運転ができます。
 
-### 語彙解析のPython依存関係は初回実行時に自動導入
+## アーキテクチャ
 
-**手動の `pip install` は不要です。** `npx skills add` はSkillファイルを配置するため、Pythonパッケージを自動実行するインストールフックはありません。代わりに `scripts/run.py` が初めてコーパスを解析するとき、必要なら `fugashi-plus[unidic-lite]` を専用Python仮想環境（ユーザーキャッシュの `~/.cache/pastiche-skills/`）にインストールして、その環境で処理を継続します。既に正常に導入されていればインストールを省略し、2回目以降は環境を再利用します。
-
-`fugashi-plus` は本家 `fugashi` の互換forkで、`import fugashi` は変わりません。両者は同じPythonパッケージ名を使うため、同じ環境への重複インストールを避け、専用仮想環境に分離します。これは辞書の扱いや環境互換性の改善であり、解析速度の向上を保証するものではありません。
-
-形態素解析により、出現語形すべての頻度・作品数を `lexical_inventory.jsonl` に保存できます。セットアップ中のネットワークアクセスはPythonパッケージの取得用であり、小説本文を送るものではありません。実際のモデル解析時には、指定したモデルサーバーに必要な本文チャンクが送信されます。
-
-パッケージを自動導入できないオフライン環境や、導入を望まない場合は `--no-auto-install --morphology none` で記号・顔文字・反復・表記揺れのみの分析を実行できます。その場合は全語彙一覧を生成しません。依存関係のインストールは最初の一回だけ通信が必要です。
-
-## パイプライン
-
-| 工程 | 解析すること | モデル呼び出し |
+| 工程 | 方法 | 出力・検査 |
 | --- | --- | --- |
-| 1. 文体統計 | 文長、会話率、改行、句読点、文字種、接続表現 | 0 |
-| 2. 語彙・表記 | 全語彙、短い連語、文末、`♡♡`、`♪♪`、顔文字、`っ/ッ`、指定した表記ペア | 0 |
-| 3. 語彙の言語感覚評価 | 短い語形が一般的な日本語として「普通・目立つ・珍しい」か、何の効果を持つか | デフォルト96候補を24件ずつ、最大約4回 |
-| 4. ナラティブ探索 | 選んだ場面の自由記述の構成技法、再出現した候補の証拠検査 | デフォルト最大36回の探索＋最大16回の検証 |
-| 5. 執筆ガイド統合 | 全部を `style_bible.md` に結合 | 0 |
+| 全文の文体・語彙・表記 | Python（原文全文のローカル計測） | `style_profile.json` / `lexical_profile.json` |
+| 短い語形の一般語感（補助） | LLMによる一般的な日本語としての直感評価 | `lexical_judgments.json`（実際の人口頻度ではない） |
+| 場面の観察 | LLM・選択した作品/チャンクを並列分析 | 語彙、情感、声、台詞、感覚、緩急、構造を証拠 ID 付きで抽出 |
+| 作品横断の意味的グループ化 | LLM・次元ごとの有限サイズのパネルを複数回比較 | 同一の「作者が行う操作」を仮説化。単にテーマが近いだけの候補は区別 |
+| グループの審査と原文確認 | LLM・独立したグループ判定 + 元チャンクでの再検証 | **異なる2作品以上**の根拠が確認された場合のみ `model_supported` |
+| 統合 | Python・検証済み記録だけを取り込む | `qualitative_bible.md` と `style_bible.md` |
 
-工程3の「一般的な日本語らしさ」は **LLMの事前学習による言語感覚の推定** です。日本語社会全体の実測頻度でも、作者固有性の証明でもありません。作品内出現回数・複数作品での再出現はPythonで独立に計測します。対照コーパスを持たなくてもモデル評価は使えますが、真の相対頻度が必要なら `--reference` が使えます。
+場面の観察結果・分類結果は、自由記述ですが抽象化した短い説明と匿名セグメントIDだけを保存します。モデルが出したIDはPythonで照合し、原文の長い連続文字列の転記を棄却します。語彙カテゴリでは、原文に実在したごく短い語形だけを任意で保持します。LLMの生成内容や人間の効果に関する断定は正しいとは限らず、`model_supported` は**人間による独立検証ではありません**。
 
-記号や表記揺れは **Unicodeを正規化せず** に計測します。したがって `♡` と `♥`、`来たっ！` と `来たッ！`、`じゃねえか` と `じゃあねえか` を区別します。デフォルトの比較ペアに加え、`--variants variants.json` で `[ ["表記A", "表記B"], ... ]` の形で比較対象を増やせます。比較は各表現の完全一致によるものです。
+### なぜナラティブが0件だったのか
 
-## 主な生成ファイル
+旧 `fast` は `SequenceMatcher` による閾値0.70の文字列類似度でしか候補をまとめませんでした。同じ技法が違う言い回し（日本語/英語を含む）で記述されると結合されず、再検証する複数作品候補が0になることがあります。新規の `llm` では表現方法・条件・効果の一致を明示的に比較するため、単語の一致だけに依存しません。モデルが共通技法を発見できる保証はありません。候補数、グループ数、検証数を監査出力に記録します。
+
+## 生成ファイル
 
 ```text
 .pastiche-private/profile/
-├── style_profile.json               # 文長・句読点などの数値
-├── lexical_profile.json             # 記号、表記揺れ、語彙・連語の分布
-├── lexical_inventory.jsonl          # 辞書による全出現語形（fugashi-plus導入時のみ）
-├── lexical_candidates.json          # モデル評価に回す短い表現
-├── lexical_judgments.json           # LLMの一般的な語感による判定
-├── lexical_bible.md                 # 実測値だけの書き方ガイド
-├── lexical_interpretation.md        # LLMによる語感評価、利用できたときのみ
-├── narrative_rules.json            # 構造規則の仮説・証拠ID
-├── narrative_audit.json            # 呼び出し件数・検証件数
-├── style_bible.md                  # 統合ガイド
-├── narrative_progress.json         # 進捗
-└── *_checkpoint.sqlite3            # 中断時に再開するためのデータ
+├── style_profile.json             # 全文の文体統計
+├── lexical_profile.json           # Unicode表記・記号・頻度
+├── lexical_inventory.jsonl        # 全語形（辞書が利用できる場合）
+├── lexical_candidates.json        # 短い候補
+├── lexical_judgments.json         # LLMの一般語感（成功した場合）
+├── lexical_bible.md
+├── lexical_interpretation.md      # LLM語感（成功した場合）
+├── qualitative_observations.json  # サンプル場面の短い抽象的観察と証拠ID
+├── qualitative_patterns.json      # 統合候補 + 支持作品数 + 検証状態
+├── qualitative_bible.md           # 検証を通った定性的な作風ガイド
+├── narrative_rules.json          # ナラティブ構成技法
+├── style_llm_audit.json           # 工程別の呼び出し/キャッシュ/再検証数
+├── narrative_audit.json           # 上記と同じ分析の監査情報
+├── narrative_progress.json        # 途中状態・成功/失敗
+├── style_llm_checkpoint.sqlite3   # LLM工程のチェックポイント
+├── lexical_review_checkpoint.sqlite3
+└── style_bible.md                 # 定量 + 質的 + ナラティブの統合
 ```
 
-**注意：** `lexical_inventory.jsonl` や候補JSONには原文に登場する短い表現が含まれます。外部公開・Gitコミットはしないでください。出力先はGit管理外を推奨します。
+特に `style_llm_audit.json` の `discovered_observations`、`cross_work_candidate_groups`、`verified_groups` を区別してください。`sample_coverage` は**サンプルした作品**を分母とし、未解析の作品に特徴が存在しないとは解釈できません。
 
-## 速度と精度を調整する
-
-LLMのリクエストは既定で逐次実行（`--llm-workers 1`）です。複数リクエストを同時処理できるモデルサーバーの場合、`--llm-workers N` で語彙の語感評価・fastモードのナラティブ探索・候補再検証を並列化できます。各段階の同時リクエスト数は最大 `N` です（段階間の同時実行は行いません）。
+## 速度・精度・コスト
 
 ```bash
-# 最大4つのLLMリクエストを同時実行
+# 作品を増やして多様な場面を観察（LLMの呼び出し・送信量も増える）
 python3 -u skills/pastiche-profile/scripts/run.py /path/to/corpus \
   --api-base http://model-server.example/llm/v1 \
-  --llm-workers 4
-```
+  --analysis-works 60 --chunks-per-work 3 --llm-workers 4
 
-- 推奨は `--llm-workers 2` から開始して、モデルサーバーの実際の並列処理性能とメモリ消費を確認しながら増やすことです。クライアント側の並列化だけでは、サーバー内部の同時推論数は増えません。
-- チェックポイントの読み書きはメインスレッドだけで実行し、途中から再開できます。応答の完了順が変わっても、プロファイルの統合順序は元の入力順のままです。
-- 従来の `--mode full` のナラティブ抽出部分は逐次実行のままです（語彙評価のみ `--llm-workers` 対応）。`--mode none` ではLLMを呼ばないため、この指定の効果はありません。
-- 並列化は呼び出し回数や料金を減らすものではありません。サーバーの並列容量が不足すると、かえって遅くなる場合があります。
-
-```bash
-# Pythonだけで全作品の文体・記号・語彙を分析（モデル不要）
+# LLMを使わず全文の表記・統計だけ計測
 python3 skills/pastiche-profile/scripts/run.py /path/to/corpus --mode none
 
-# より多くの作品を調べる（品質を追求、速度は落ちる）
-python3 -u skills/pastiche-profile/scripts/run.py /path/to/corpus \
-  --api-base http://model-server.example/llm/v1 \
-  --narrative-works 30 --chunks-per-work 3
+# 従来の文字列類似度による高速モード（比較・互換用）
+python3 skills/pastiche-profile/scripts/run.py /path/to/corpus \
+  --api-base http://model-server.example/llm/v1 --mode fast
 
-# 旧方式：すべてのチャンクで事象グラフの抽出と検証（最も重い）
-python3 -u skills/pastiche-profile/scripts/run.py /path/to/corpus \
+# 従来のチャンク全数二重解析
+python3 skills/pastiche-profile/scripts/run.py /path/to/corpus \
   --api-base http://model-server.example/llm/v1 --mode full
 
-# 語彙の言語感覚判定は不要なら省く（語彙統計は維持）
-python3 -u skills/pastiche-profile/scripts/run.py /path/to/corpus \
+# 語感の一般言語モデル評価を省略。文脈つき質的分析は維持
+python3 skills/pastiche-profile/scripts/run.py /path/to/corpus \
   --api-base http://model-server.example/llm/v1 --no-lexical-review
-
-# すべての適格な語形候補をLLMに評価させる（大量の呼び出しに注意）
-python3 -u skills/pastiche-profile/scripts/run.py /path/to/corpus \
-  --api-base http://model-server.example/llm/v1 --lexical-review-limit 0
 ```
 
-通常のナラティブ高速モードは最大18作品、各2チャンクをサンプリングし、複数作品に現れた候補にだけ再検証を行います。固定13種類のOperationへの押し込みをやめ、抽象的な構成技法を自由記述で発見します。複数の異なる規則が似た文章で表される場合、単純な類似文字列のクラスタリングが失敗することがあります。また、標本抽出で稀な技法や長距離の伏線を見落とす可能性があります。**推論回数の削減と解析精度の維持は別問題**です。
+| オプション（`llm` モード） | 既定 | 内容 |
+| --- | ---: | --- |
+| `--analysis-works` | 30 | サンプル対象作品数、`0` は全作品 |
+| `--chunks-per-work` | 2 | 各作品の離れた箇所から選ぶ場面数 |
+| `--chunk-chars` | 3800 | チャンクの目安文字数 |
+| `--cluster-batch-size` | 30 | 1度にLLMに比較させる候補数 |
+| `--cluster-rounds` | 3 | 分割された候補を再配置して比較する最大周数 |
+| `--verify-groups` | 16 | 原文再検証へ進めるグループ上限 |
+| `--verify-works` | 4 | 1グループあたり原文を検査する作品数上限 |
+| `--min-works` | 2 | 採用の必要最低作品数 |
+| `--llm-workers` | 1 | 各LLM段階の最大同時リクエスト数 |
 
-中断したら**同じコマンドで再実行**してください。処理済みチャンクと語彙評価バッチはSQLiteに残ります。`--restart` を指定したときのみ対応チェックポイントを破棄します。`--timeout 0` が既定で、モデルの待機時間上限は設けません（実行環境側の制限とは別）。15秒ごとに状態を報告します。
+LLM呼び出しは段階ごとに実行し、段階内で並列化します。実際の速度は指定したサーバーの同時推論能力次第です。局所観察のキャッシュはグループ化の設定変更でも再利用し、チェックポイント書き込みはメインスレッドのみが担当します。`--restart` のみ分析キャッシュを消去します。通信失敗や不正なJSONは、根拠がないという判定ではなくエラーとして扱います。`--timeout 0` は既定でソケット待機時間に上限を設けません。
 
+## 品質・秘匿性の限界
 
-## 執筆後の表記・語彙チェック（pastiche-write）
+- 解析は一部の場面だけを読むので、長い伏線、稀な語法、作品全体の情感の推移を見落とし得ます。
+- 同じシリーズの多数のファイルは、互いに独立した作品とは限りません。別作者・同ジャンルの対照サンプルがない限り、作者固有性を立証しません。
+- ナラティブと語感の評価はモデルの解釈です。証拠IDが原文にあることと解釈が正しいことは同じではありません。
+- `lexical_inventory.jsonl`、短い語形の候補、質的出力は非公開で保管してください。外部にアップロードしないでください。
+- 記号・表記揺れはUnicode正規化せず、`♡/♥`、`！/!` などを区別します。顔文字候補はヒューリスティックであり誤検出し得ます。
+- 作風再現の成否はガイドが完成しただけでは確かめられません。新しい題材で執筆し、**条件を隠した比較評価**が別途必要です。
 
-`pastiche-write` は統合済みの `style_bible.md` から文体・表記・物語構造を参照します。追加依存は不要で、次のコマンドは**元コーパスを読まず**に新しい原稿と `lexical_profile.json` を比較します。
+## 執筆に利用する
 
-```bash
-python3 skills/pastiche-write/scripts/evaluate_lexical.py \
-  --profile /path/to/.pastiche-private/profile/lexical_profile.json \
-  --draft /path/to/new-draft.txt \
-  --out /path/to/.pastiche-private/write_lexical_review.json
-```
-
-記号（♡・♪・☆など）の頻度と会話内の位置、連打長、混合記号列、顔文字候補、表記ペア（「じゃねえか／じゃあねえか」「来たっ！／来たッ！」）、短い文末表現を比較します。数値は文脈を考えて解釈するための参考で、機械的な置換や回数の強制には使いません。
-
-## Agent Skillsでの利用
+`pastiche-write` は `style_bible.md` の実測統計、短い語形選好、原文で再確認された質的・物語技法を使います。元作品の台詞、人物、筋書きや固有表現の長い連続は転用しません。生成後は `evaluate_lexical.py` と `pastiche.py evaluate` によりローカルで集計値を確認できます。
 
 ```bash
 npx skills add zkamiyama/pastiche-skills
+python3 -m unittest discover -s tests -v
 ```
 
-> pastiche-profileを使って `/path/to/corpus` の作風プロファイルを作って。APIベースURLは `http://model-server.example/llm/v1`。表記、語彙の一般的な語感、ナラティブの共通パターンまで分析して。
-
-> pastiche-writeを使って `style_bible.md` に従い、指定した新規プロットの短編を書いて。実測の語彙・表記傾向も、内容に合う範囲で反映して。
-
-**Agentはインストール済みのスクリプトを実行し、エラーを解消するために勝手に編集しないでください。** APIベースURLは `run.py` にそのまま渡します。接続の問題を勝手なモデル名やパス変更で回避せず、診断情報と修正候補を示してください。コードの修正は、この公開リポジトリ側でテストしてから配布します。
-
-研究と限界：[docs/research.md](docs/research.md) · [Lexical Method](skills/pastiche-profile/references/METHOD.md) · [Narrative Method](skills/pastiche-profile/references/NARRATIVE_METHOD.md)。合成データによるテスト：`python3 -m unittest discover -s tests -v`。
-
-MIT License ([LICENSE](LICENSE))。
+実装手順: [LLM Style Method](skills/pastiche-profile/references/LLM_STYLE_METHOD.md)。
+旧方式の背景: [Narrative Method](skills/pastiche-profile/references/NARRATIVE_METHOD.md)。
+MIT License。
