@@ -50,3 +50,4 @@ jobs:
         run: |
           python tests/browser_smoke.py
           python tests/browser_world_smoke.py
+          python tests/browser_perspective_smoke.py
