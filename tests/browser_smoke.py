@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 import tempfile
 import threading
+import json
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'skills/pastiche-profile/scripts'
 sys.path.insert(0, str(SCRIPTS))
@@ -40,14 +41,27 @@ def main():
                 page.locator('button.claim').first.click()
                 page.wait_for_selector('#inspector mark')
                 assert '🌅ミナ' in page.locator('#inspector mark').first.inner_text()
-                page.get_by_role('button', name='承認', exact=True).click()
-                # Locator assertions work with script-src 'self'. Do not relax
-                # the application's CSP merely to evaluate polling strings.
-                expect(page.locator('#message')).to_contain_text('判断を履歴')
+                # Default: source-backed claims are available without
+                # making the user approve every edge individually.
                 page.select_option('#scope', 'demo:original')
-                page.get_by_role('button', name='承認済みを出力', exact=True).click()
+                page.get_by_role('button', name='執筆用に出力', exact=True).click()
                 expect(page.locator('#message')).to_contain_text('writer_context.json')
-                assert (out / 'writer_context.json').is_file()
+                context = json.loads((out / 'writer_context.json').read_text(encoding='utf-8'))
+                assert [c['status'] for c in context['characters']['claims']] == ['auto_accepted']
+
+                page.get_by_role('button', name='使用停止', exact=True).click()
+                # Locator assertions work with script-src 'self'; do not relax CSP.
+                expect(page.locator('#message')).to_contain_text('判断を履歴')
+                page.get_by_role('button', name='執筆用に出力', exact=True).click()
+                context = __import__('json').loads((out / 'writer_context.json').read_text(encoding='utf-8'))
+                assert context['characters']['claims'] == []
+
+                # Undo the opt-out by explicitly accepting the claim.
+                page.get_by_role('button', name='確認済みにする', exact=True).click()
+                expect(page.locator('#message')).to_contain_text('判断を履歴')
+                page.get_by_role('button', name='執筆用に出力', exact=True).click()
+                context = __import__('json').loads((out / 'writer_context.json').read_text(encoding='utf-8'))
+                assert [c['status'] for c in context['characters']['claims']] == ['human_approved']
                 store = Store(out / 'character_graph.sqlite3')
                 assert store.claim(claim)['status'] == 'human_approved'
                 store.close()
@@ -58,7 +72,7 @@ def main():
                 assert page.locator('#graph').is_visible()
                 browser.close()
             assert not errors, errors
-            print('PASS: real Chromium, token auth, evidence highlight, approval, export, responsive view')
+            print('PASS: real Chromium, auto-use, revoke/restore, evidence highlight, export and responsive view')
         finally:
             server.shutdown()
             server.server_close()
