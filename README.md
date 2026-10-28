@@ -18,6 +18,7 @@ python3 -u skills/pastiche-profile/scripts/run.py "/path/to/corpus" \
 - `~/.pi/agent/models.json` に同一ベース URL のモデルが一つあれば自動選択します。それ以外は `/models` を参照し、複数あれば `--model MODEL_ID` が必要です。
 - リモートに指定したモデルサーバーには、**サンプルした原文チャンクと短い語彙候補を送信します**。HTTP は暗号化されないため、信頼できるネットワークで使ってください。`--api-key-env` は環境変数名を指定します。認証つきリモート接続は HTTPS を使用してください。
 - `--check` は合成 JSON のみで通信テストし、コーパスを読みません。
+- **標準で全ての適格な作品を対象**とし、各作品から最大2チャンクを抽出します。91作品なら最大182チャンクのLLM観察です（630チャンクすべての分析ではありません）。作品数を減らす場合のみ `--analysis-works N` を指定します。
 - 初回のみ必要なら `fugashi-plus[unidic-lite]` を専用キャッシュ venv に導入します。`npx skills add` 自体にインストールフックはありません。導入できない場合は `--no-auto-install --morphology none` で全文語彙一覧なしの縮退運転ができます。
 
 ## アーキテクチャ
@@ -67,10 +68,10 @@ python3 -u skills/pastiche-profile/scripts/run.py "/path/to/corpus" \
 ## 速度・精度・コスト
 
 ```bash
-# 作品を増やして多様な場面を観察（LLMの呼び出し・送信量も増える）
+# 負荷を減らしたいときだけ対象作品を最大30件に制限
 python3 -u skills/pastiche-profile/scripts/run.py /path/to/corpus \
   --api-base http://model-server.example/llm/v1 \
-  --analysis-works 60 --chunks-per-work 3 --llm-workers 4
+  --analysis-works 30 --chunks-per-work 2 --llm-workers 4
 
 # LLMを使わず全文の表記・統計だけ計測
 python3 skills/pastiche-profile/scripts/run.py /path/to/corpus --mode none
@@ -90,7 +91,7 @@ python3 skills/pastiche-profile/scripts/run.py /path/to/corpus \
 
 | オプション（`llm` モード） | 既定 | 内容 |
 | --- | ---: | --- |
-| `--analysis-works` | 30 | サンプル対象作品数、`0` は全作品 |
+| `--analysis-works` | **0（全作品）** | 対象は全ての適格な作品。正の整数で作品数を制限 |
 | `--chunks-per-work` | 2 | 各作品の離れた箇所から選ぶ場面数 |
 | `--chunk-chars` | 3800 | チャンクの目安文字数 |
 | `--cluster-batch-size` | 30 | 1度にLLMに比較させる候補数 |
@@ -99,6 +100,8 @@ python3 skills/pastiche-profile/scripts/run.py /path/to/corpus \
 | `--verify-works` | 4 | 1グループあたり原文を検査する作品数上限 |
 | `--min-works` | 2 | 採用の必要最低作品数 |
 | `--llm-workers` | 1 | 各LLM段階の最大同時リクエスト数 |
+
+全作品を標準で対象にするため、コーパスの規模に比例してLLMの観察リクエストが増えます。大規模コーパスでは `--analysis-works N` で負荷を制限できます。
 
 LLM呼び出しは段階ごとに実行し、段階内で並列化します。実際の速度は指定したサーバーの同時推論能力次第です。局所観察のキャッシュはグループ化の設定変更でも再利用し、チェックポイント書き込みはメインスレッドのみが担当します。`--restart` のみ分析キャッシュを消去します。通信失敗や不正なJSONは、根拠がないという判定ではなくエラーとして扱います。`--timeout 0` は既定でソケット待機時間に上限を設けません。
 
