@@ -29,6 +29,7 @@ python3 -u skills/pastiche-profile/scripts/run.py "/path/to/corpus" \
 | 場面の観察 | LLM・選択した作品/チャンクを並列分析 | 語彙、情感、声、台詞、感覚、緩急、構造を証拠 ID 付きで抽出 |
 | 作品横断の意味的グループ化 | LLM・次元ごとの有限サイズのパネルを複数回比較 | 同一の「作者が行う操作」を仮説化。単にテーマが近いだけの候補は区別 |
 | グループの審査と原文確認 | LLM・独立したグループ判定 + 元チャンクでの再検証 | **異なる2作品以上**の根拠が確認された場合のみ `model_supported` |
+| 根拠付きの全体要約 | LLM・`model_supported` のみを読み、パターンIDつきで解説 | `qualitative_summary.json` |
 | 統合 | Python・検証済み記録だけを取り込む | `qualitative_bible.md` と `style_bible.md` |
 
 場面の観察結果・分類結果は、自由記述ですが抽象化した短い説明と匿名セグメントIDだけを保存します。モデルが出したIDはPythonで照合し、原文の長い連続文字列の転記を棄却します。語彙カテゴリでは、原文に実在したごく短い語形だけを任意で保持します。LLMの生成内容や人間の効果に関する断定は正しいとは限らず、`model_supported` は**人間による独立検証ではありません**。
@@ -50,6 +51,7 @@ python3 -u skills/pastiche-profile/scripts/run.py "/path/to/corpus" \
 ├── lexical_interpretation.md      # LLM語感（成功した場合）
 ├── qualitative_observations.json  # サンプル場面の短い抽象的観察と証拠ID
 ├── qualitative_patterns.json      # 統合候補 + 支持作品数 + 検証状態
+├── qualitative_summary.json       # LLMがまとめた根拠つき作風の特徴
 ├── qualitative_bible.md           # 検証を通った定性的な作風ガイド
 ├── narrative_rules.json          # ナラティブ構成技法
 ├── style_llm_audit.json           # 工程別の呼び出し/キャッシュ/再検証数
