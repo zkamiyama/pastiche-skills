@@ -3,6 +3,7 @@ from __future__ import annotations
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+from json_boundary import loads as strict_loads, read_object
 from pathlib import Path
 import secrets
 from urllib.parse import parse_qs, urlsplit
@@ -80,7 +81,7 @@ def make_server(out: Path, port=8765, token: str | None = None):
                     from .epistemic import simulate
                     plan_path = out / "writing" / "story_blueprint.json"
                     if plan_path.is_file():
-                        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+                        plan = read_object(plan_path)
                         data = simulate(plan["epistemic"], plan["scenes"], plan["characters"])
                     else:
                         data = {"events": [], "note": "No authored perspective timeline yet."}
@@ -113,7 +114,7 @@ def make_server(out: Path, port=8765, token: str | None = None):
                 length = int(self.headers.get("Content-Length", "0"))
                 if not 0 < length <= 65536 or self.headers.get_content_type() != "application/json":
                     return self.send(400, {"error": "A bounded JSON request is required"})
-                body = json.loads(self.rfile.read(length))
+                body = strict_loads(self.rfile.read(length), maximum=65536)
                 if not isinstance(body, dict):
                     raise ValueError("JSON body must be an object")
                 store = Store(out / "character_graph.sqlite3")

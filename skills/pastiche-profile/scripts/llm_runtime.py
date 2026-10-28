@@ -9,6 +9,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -22,6 +23,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable, Iterable, Iterator
 from task_transport import TasksPending
+from json_boundary import loads as strict_loads, object_copy, atomic_json
 
 MAX_RESPONSE_CHARS = 2_000_000
 
@@ -248,9 +250,12 @@ class HTTPModel:
                     if len(reply) > MAX_RESPONSE_CHARS * 4:
                         raise ModelRequestError("model response exceeded size limit", transient=False)
                     try:
-                        body = json.loads(reply)
+                        body = strict_loads(reply)
+                        self._check_finish(body)
                         text = (body["response"] if self.backend == "ollama"
                                 else body["choices"][0]["message"]["content"])
+                    except ModelRequestError:
+                        raise
                     except (KeyError, IndexError, ValueError, TypeError) as exc:
                         raise ModelRequestError("model response was not valid API JSON") from exc
         except urllib.error.HTTPError as exc:
@@ -263,22 +268,42 @@ class HTTPModel:
             name = type(exc).__name__
             raise ModelRequestError(f"model transport failed ({name}); check endpoint and server") from exc
         try:
-            value = json.loads(text)
+            value = strict_loads(text)
             if not isinstance(value, dict):
                 raise ValueError("top-level response is not an object")
             return value
         except (ValueError, TypeError) as exc:
             raise ModelRequestError("model did not return a JSON object; verify JSON mode/model compatibility") from exc
 
+    def _check_finish(self, body: Any) -> None:
+        if not isinstance(body, dict):
+            raise ModelRequestError('API event must be an object')
+        if self.backend == 'ollama':
+            reason = body.get('done_reason')
+            if reason is not None and reason != 'stop':
+                raise ModelRequestError('model generation did not finish normally', transient=False)
+        else:
+            choices = body.get('choices', [])
+            if not isinstance(choices, list) or any(not isinstance(c, dict) for c in choices):
+                raise ModelRequestError('invalid API choices')
+            for choice in choices:
+                reason = choice.get('finish_reason')
+                if reason is not None and reason != 'stop':
+                    raise ModelRequestError('model generation did not finish normally', transient=False)
+
     def _stream_text(self, response: Any) -> str:
         """Read Ollama NDJSON or OpenAI-compatible SSE without exposing partial text."""
         fragments: list[str] = []
         total = 0
+        wire_bytes = 0
         finished = False
         while True:
             raw = response.readline(131073)
             if not raw:
                 break
+            wire_bytes += len(raw)
+            if wire_bytes > MAX_RESPONSE_CHARS * 8:
+                raise ModelRequestError('stream wire byte budget exceeded', transient=False)
             if len(raw) > 131072:
                 raise ModelRequestError("stream event exceeded size limit", transient=False)
             line = raw.strip()
@@ -286,13 +311,18 @@ class HTTPModel:
                 continue
             if self.backend == "ollama":
                 try:
-                    obj = json.loads(line)
+                    obj = strict_loads(line)
+                    self._check_finish(obj)
+                except ModelRequestError:
+                    raise
                 except (ValueError, TypeError) as exc:
                     raise ModelRequestError("invalid Ollama NDJSON event") from exc
                 if obj.get("error"):
                     raise ModelRequestError("Ollama reported an error while generating")
                 fragment = obj.get("response", "")
-                finished = bool(obj.get("done", False))
+                if type(obj.get("done", False)) is not bool:
+                    raise ModelRequestError('invalid stream completion flag')
+                finished = obj.get("done", False)
             else:
                 if line.startswith(b":") or line.startswith(b"event:"):
                     continue
@@ -303,13 +333,19 @@ class HTTPModel:
                     finished = True
                     break
                 try:
-                    obj = json.loads(item)
+                    obj = strict_loads(item)
+                    self._check_finish(obj)
+                except ModelRequestError:
+                    raise
                 except (ValueError, TypeError) as exc:
                     raise ModelRequestError("invalid OpenAI-compatible SSE event") from exc
                 if obj.get("error"):
                     raise ModelRequestError("model server reported a stream error")
                 choices = obj.get("choices") or []
-                fragment = choices[0].get("delta", {}).get("content", "") if choices else ""
+                delta = choices[0].get("delta", {}) if choices else {}
+                if not isinstance(delta, dict):
+                    raise ModelRequestError('invalid stream delta')
+                fragment = delta.get("content", "")
                 # [DONE] is required; a finish_reason alone may be followed by usage events.
             if fragment:
                 if not isinstance(fragment, str):
@@ -330,6 +366,8 @@ class HTTPModel:
 class ProgressReporter:
     """Print anonymous progress and keep an inspectable on-disk liveness snapshot."""
     def __init__(self, out: Path, interval: float = 15.0):
+        if type(interval) not in (int, float) or not math.isfinite(interval) or interval < 0:
+            raise ValueError("progress interval must be a finite nonnegative number")
         self.out = out
         self.interval = interval
         self.start = time.monotonic()
@@ -460,14 +498,7 @@ def model_jobs(jobs: Iterable[Any], model: Any, workers: int,
 
 
 def atomic_json_write(path: Path, data: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
-    try:
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        os.replace(tmp, path)
-    finally:
-        if tmp.exists():
-            tmp.unlink()
+    atomic_json(path, data)
 
 
 class CheckpointStore:

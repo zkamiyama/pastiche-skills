@@ -7,11 +7,10 @@ revelations separate. It validates declared access, not the meaning of prose.
 from __future__ import annotations
 from copy import deepcopy
 from .store import text, dump
+from .epistemic_schema import normalize, SCHEMA, CHANNELS
 
 BASES = {'perception', 'communication', 'inference', 'narration', 'unknown'}
-CHANNELS = {'sight', 'hearing', 'reading', 'touch'}
 RESERVED = {'$world', '$reader'}
-SCHEMA = 'pastiche.epistemic.timeline.v1'
 
 
 def array(v, maximum=1000):
@@ -107,6 +106,7 @@ def simulate(timeline: dict, scenes: list[dict], characters: list[dict]) -> dict
     """
     if not isinstance(timeline, dict) or timeline.get('schema') != SCHEMA:
         raise ValueError('explicit epistemic timeline v1 required; regenerate legacy plans')
+    timeline = normalize(timeline, scenes, characters)
     if len(dump(timeline)) > 2_000_000:
         raise ValueError('epistemic input exceeds the bounded replay budget')
     agents = {c['id'] for c in characters}
@@ -152,6 +152,7 @@ def simulate(timeline: dict, scenes: list[dict], characters: list[dict]) -> dict
     events = array(timeline.get('events'), 1200)
     if len(events) * max(1, len(agents)) * max(1, len(facts)) > 250_000:
         raise ValueError('perspective snapshots exceed replay budget; split the plan')
+    snapshot_bytes = 0
     seen_ids, seen_orders, covered = set(), set(), set()
     for e in events:
         if not isinstance(e, dict): raise ValueError('invalid epistemic event')
@@ -238,8 +239,12 @@ def simulate(timeline: dict, scenes: list[dict], characters: list[dict]) -> dict
         normalized.append({'id': eid,'scene_id':sid,'order':e['order'],'participants':participants,'access':access,
             'requires':reqs,'updates':updates,'observations':observations,'messages':messages,
             'inferences':inferences,'forget':forget,'reader_reveals':reveal})
-        snapshots.append({'event_id':eid,'scene_id':sid,'order':e['order'],'before':before,
-            'after':{'world':deepcopy(world),'beliefs':deepcopy(minds),'reports':deepcopy(heard)}})
+        snapshot = {'event_id':eid,'scene_id':sid,'order':e['order'],'before':before,
+            'after':{'world':deepcopy(world),'beliefs':deepcopy(minds),'reports':deepcopy(heard)}}
+        snapshot_bytes += len(dump(snapshot).encode('utf-8'))
+        if snapshot_bytes > 16_000_000:
+            raise ValueError('perspective snapshots exceed byte budget; split the plan')
+        snapshots.append(snapshot)
     # Reader state follows presentation, not the modeled chronological sequence.
     reader, reader_views = {}, []
     by_event = {s['event_id']:s for s in snapshots}
@@ -260,10 +265,14 @@ def simulate(timeline: dict, scenes: list[dict], characters: list[dict]) -> dict
                   'Higher-order beliefs, uncertain alternatives and logical entailment are not solved by this ledger.']}
 
 
-def scene_view(plan: dict, scene_id: str, agent: str | None = None) -> dict:
+def scene_view(plan: dict, scene_id: str, agent: str | None = None, *, event_id: str | None = None) -> dict:
     report = simulate(plan['epistemic'], plan['scenes'], plan['characters'])
     snapshots = [s for s in report['events'] if s['scene_id'] == scene_id]
     if not snapshots: raise ValueError('unknown scene')
+    if event_id is not None:
+        snapshots = [s for s in snapshots if s['event_id'] == event_id]
+        if not snapshots:
+            raise ValueError('event does not belong to the selected scene')
     if agent is None:
         return {'audience':'director','scene_id':scene_id,'events':snapshots,
                 'reader':[r for r in report['reader'] if r['scene_id']==scene_id]}
@@ -271,14 +280,16 @@ def scene_view(plan: dict, scene_id: str, agent: str | None = None) -> dict:
         raise ValueError('unknown viewpoint character')
     # Do NOT export reality, other minds, future event summaries, or correctness
     # flags that would reveal that the viewpoint character has a false belief.
-    visible=set()
-    views=[]
-    for s in snapshots:
-        before=s['before']['beliefs'][agent];after=s['after']['beliefs'][agent]
-        reports=s['after']['reports'][agent]
-        visible.update(before);visible.update(after);visible.update(r['fact'] for r in reports)
-        views.append({'event_id':s['event_id'],'beliefs_before':before,'beliefs_after':after,'heard_reports':reports})
-    facts=[{'id':f['id'],'description':f['description']} for f in plan['epistemic']['facts'] if f['id'] in visible]
-    return {'schema':'pastiche.scene.perspective.v1','audience':'character','scene_id':scene_id,
-            'character_id':agent,'facts':facts,'events':views,
-            'rule':'Only this viewpoint is available. No access to objective world or other minds; do not correct false beliefs from external knowledge.'}
+    # The writer starts BEFORE the first event in a scene (or an explicitly
+    # selected event). Exporting all after-states leaks discoveries from later
+    # in the same scene into earlier dialogue, even though they are "own" beliefs.
+    selected = snapshots[0]
+    beliefs = selected['before']['beliefs'][agent]
+    reports = selected['before']['reports'][agent]
+    visible = set(beliefs) | {r['fact'] for r in reports}
+    facts = [{'id':f['id'],'description':f['description']} for f in report['timeline']['facts'] if f['id'] in visible]
+    return {'schema':'pastiche.scene.perspective.v2','audience':'character','scene_id':scene_id,
+            'character_id':agent, 'at':'before_event',
+            'facts':facts,'events':[{'event_id':selected['event_id'],
+                'beliefs_before':beliefs,'heard_reports':reports}],
+            'rule':'Only this viewpoint at event entry is available. No future discoveries, objective truth or other minds.'}

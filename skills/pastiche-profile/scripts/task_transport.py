@@ -7,11 +7,10 @@ reads a private request, delegates its prompt, then imports a JSON answer using
 from __future__ import annotations
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
-import tempfile
 from typing import Any, Callable
+from json_boundary import read_object, atomic_json, object_copy
 
 SCHEMA = 'pastiche.agent-task.v1'
 MAX_BYTES = 8_000_000
@@ -30,28 +29,11 @@ def _json(value: Any) -> str:
 
 
 def _read(path: Path) -> dict:
-    if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_BYTES:
-        raise ValueError('missing, linked or oversized task file')
-    value = json.loads(path.read_text(encoding='utf-8'))
-    if not isinstance(value, dict):
-        raise ValueError('task/response must be a JSON object')
-    return value
+    return read_object(path, maximum=MAX_BYTES)
 
 
-def _atomic(path: Path, value: dict) -> None:
-    if path.is_symlink():
-        raise ValueError('symlink task file is not allowed')
-    content = _json(value).encode('utf-8')
-    if len(content) > MAX_BYTES:
-        raise ValueError('task exceeds size limit')
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix='.task-')
-    try:
-        with os.fdopen(fd, 'wb') as f:
-            f.write(content)
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+def _atomic(path: Path, value: dict, *, replace: bool = True) -> None:
+    atomic_json(path, value, replace=replace, maximum=MAX_BYTES)
 
 
 class SubagentModel:
@@ -88,7 +70,11 @@ class SubagentModel:
             if _read(req_path) != request:
                 raise ValueError('task request differs from the expected input')
         else:
-            _atomic(req_path, request)
+            try:
+                _atomic(req_path, request, replace=False)
+            except FileExistsError:
+                if _read(req_path) != request:
+                    raise ValueError('concurrent task request differs from expected input')
         output = self.task_dir/'responses'/f'{task_id}.json'
         if not output.exists():
             raise TasksPending(self.task_dir)
@@ -97,7 +83,7 @@ class SubagentModel:
                 or response.get('input_sha256') != request['input_sha256']
                 or not isinstance(response.get('result'), dict)):
             raise ValueError('subagent result does not match task input/JSON contract')
-        return response['result']
+        return object_copy(response['result'])
 
 
 class CallableModel:
@@ -113,9 +99,7 @@ belongs to the task runner. Thread safety is the host callback's responsibility.
         self.callback, self.model = callback, identity
     def ask(self, prompt: str) -> dict:
         result = self.callback(prompt)
-        if not isinstance(result, dict):
-            raise ValueError('host callback must return a JSON object')
-        return result
+        return object_copy(result)
 
 
 def task_id_arg(value: str) -> str:
@@ -124,14 +108,26 @@ def task_id_arg(value: str) -> str:
     return value
 
 
+def _request(path: Path) -> dict:
+    request = _read(path)
+    task_id = task_id_arg(path.stem)
+    profile, prompt = request.get('profile'), request.get('prompt')
+    if (request.get('schema') != SCHEMA or request.get('task_id') != task_id
+            or not isinstance(profile,str) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,80}',profile)
+            or not isinstance(prompt,str)):
+        raise ValueError('invalid task request contract')
+    expected = hashlib.sha256(_json([SCHEMA, profile, prompt]).encode('utf-8')).hexdigest()
+    if expected != task_id or request.get('input_sha256') != hashlib.sha256(prompt.encode('utf-8')).hexdigest():
+        raise ValueError('modified request cannot be delegated or answered')
+    return request
+
+
 def list_tasks(directory: Path) -> list[dict]:
     model = SubagentModel(directory)
     rows = []
     for path in sorted((model.task_dir/'requests').glob('*.json')):
         task_id_arg(path.stem)
-        r = _read(path)
-        if r.get('task_id') != path.stem:
-            raise ValueError('invalid task filename')
+        r = _request(path)
         rows.append({'task_id': path.stem, 'profile': r['profile'],
                      'state': 'response_available' if (model.task_dir/'responses'/path.name).exists() else 'pending',
                      'input_sha256': r['input_sha256'], 'prompt_characters': len(r['prompt'])})
@@ -141,17 +137,14 @@ def list_tasks(directory: Path) -> list[dict]:
 def submit(directory: Path, task_id: str, result: dict, *, replace: bool = False) -> None:
     model = SubagentModel(directory)
     task_id = task_id_arg(task_id)
-    request = _read(model.task_dir/'requests'/f'{task_id}.json')
-    expected = hashlib.sha256(_json([SCHEMA, request['profile'], request['prompt']]).encode('utf-8')).hexdigest()
-    if expected != task_id or request['input_sha256'] != hashlib.sha256(request['prompt'].encode('utf-8')).hexdigest():
-        raise ValueError('modified request cannot be answered')
-    if not isinstance(result, dict):
-        raise ValueError('result must be an object')
+    request = _request(model.task_dir/'requests'/f'{task_id}.json')
+    result = object_copy(result)
     target = model.task_dir/'responses'/f'{task_id}.json'
-    if target.exists() and not replace:
-        raise ValueError('response exists; explicit --replace required for repair')
-    _atomic(target, {'schema': SCHEMA, 'task_id': task_id,
-                     'input_sha256': request['input_sha256'], 'result': result})
+    try:
+        _atomic(target, {'schema': SCHEMA, 'task_id': task_id,
+                        'input_sha256': request['input_sha256'], 'result': result}, replace=replace)
+    except FileExistsError as exc:
+        raise ValueError('response exists; explicit --replace required for repair') from exc
 
 
 def add_task_commands(parser):
@@ -168,7 +161,7 @@ def task_command(args):
     task_id = task_id_arg(args.task_id or '')
     model = SubagentModel(args.task_dir)
     if args.operation == 'show':
-        return _read(model.task_dir/'requests'/f'{task_id}.json')
+        return _request(model.task_dir/'requests'/f'{task_id}.json')
     if not args.response_file:
         raise ValueError('--response-file is required')
     submit(args.task_dir, task_id, _read(args.response_file), replace=args.replace)

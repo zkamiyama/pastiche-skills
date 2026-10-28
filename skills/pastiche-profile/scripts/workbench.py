@@ -3,6 +3,7 @@
 from __future__ import annotations
 import argparse
 import json
+from json_boundary import read_object
 from pathlib import Path
 import sys
 from execution import add_model_flags, model_from
@@ -141,19 +142,20 @@ def main(argv=None):
     view.add_argument('--scene-id', required=True)
     view.add_argument('--character-id', help='required except for explicit --director')
     view.add_argument('--director', action='store_true')
+    view.add_argument('--event-id', help='private state before a particular event in the scene')
     view.add_argument('--out', type=Path, required=True)
     add_task_commands(commands.add_parser('tasks', help='private host-subagent JSON handoff'))
     args = p.parse_args(argv)
     try:
         if args.command in {'perspectives', 'scene-context'}:
             from story_workbench.epistemic import simulate, scene_view
-            plan = json.loads(args.plan.read_text(encoding='utf-8'))
+            plan = read_object(args.plan)
             if args.command == 'perspectives':
                 result = simulate(plan['epistemic'], plan['scenes'], plan['characters'])
             else:
                 if bool(args.character_id) == args.director:
                     raise ValueError('select --character-id OR --director')
-                result = scene_view(plan, args.scene_id, args.character_id)
+                result = scene_view(plan, args.scene_id, args.character_id, event_id=args.event_id)
             atomic_json(args.out, result)
         elif args.command == 'tasks':
             result = task_command(args)
@@ -187,12 +189,12 @@ def main(argv=None):
                              world_mode=args.world_mode, world_entity_ids=args.world_entity_id)
         elif args.command in {'plan', 'audit-plan', 'audit-draft'}:
             from story_workbench import writing
-            context = json.loads(args.context.read_text(encoding='utf-8'))
+            context = read_object(args.context)
             if args.command == 'plan':
                 result = writing.make_plan(args.out, context, args.brief.read_text(encoding='utf-8'), model_from(args),
                                            retries=args.retries, interval=args.progress_interval)
             else:
-                plan = json.loads(args.plan.read_text(encoding='utf-8'))
+                plan = read_object(args.plan)
                 if args.command == 'audit-plan':
                     writing.validate_plan(plan, context)
                     result = {'status': 'declared_plan_valid', 'note': 'Checks declared facts and dependencies, not literary truth or draft prose.'}
