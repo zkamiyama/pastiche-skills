@@ -17,7 +17,7 @@ The output must not be interpreted as proof of author identity, unique authorial
 
 - Default: up to **30 works × 2 passages** (60 scene requests). It does **not** analyze all 91 works just because the corpus contains 91 files.
 - Every request sends only the selected passage plus a constrained, schema-specific analysis prompt to the configured model endpoint.
-- Prompt returns at most six records with `dimension`, `trigger`, `technique`, `effect`, at least two actual `evidence_ids`, and zero to two optional short `anchors` only for lexicon.
+- Prompt returns at most seven records with `dimension`, `trigger`, `technique`, `effect`, at least two actual `evidence_ids`, and zero to two optional short `anchors` only for lexicon.
 - Python rejects unsupported dimensions, fabricated IDs, prose with long source-matching fragments, malformed JSON, ungrounded lexical anchors and nonsensical field lengths.
 - Cache key combines model identity, endpoint, prompt/code version and **hash of full input chunk**. Only accepted abstract observations go to SQLite; the input text is not stored in the checkpoint.
 - The output `qualitative_observations.json` includes only anonymized IDs, abstract descriptions and short matched anchor strings. It never includes passages or paths.
