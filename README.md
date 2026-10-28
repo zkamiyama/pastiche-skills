@@ -1,69 +1,106 @@
 # pastiche-skills
 
-日本語TXTコーパスから文体統計・ナラティブルールを抽出し、新しい文章向けの執筆ガイドを作るAgent Skills。
+日本語TXTコーパスから **文体・語彙・表記・物語構造** のプロファイルを作り、新しい題材の執筆に使う Agent Skills です。原文をリポジトリに置く必要はありません。Python 3.10以降。
 
-## はじめかた（1コマンド）
+`pastiche-profile` は全文の統計をローカルで計測し、必要な場面だけモデルに送って構成技法を抽出します。`pastiche-write` は生成されたガイドを使って、独立した人物・設定・プロットで執筆します。
 
-Python 3.10以降。コーパスは**1作品1TXT**として手元のフォルダに用意してください。
+## 最初の1コマンド
 
 ```bash
+python3 -u skills/pastiche-profile/scripts/run.py "/path/to/corpus" \
+  --api-base "http://model-server.example/llm/v1" \
+  --out "/path/to/.pastiche-private/profile"
+```
+
+- `/path/to/corpus` はTXTファイルが入ったフォルダです（UTF-8またはCP932）。
+- APIのベースURLをそのまま指定します。`/llm/v1` のようなプレフィックスも保持します。スクリプトが `/chat/completions` を補います。
+- `~/.pi/agent/models.json` に同じベースURLのモデルが1つあれば自動選択します。それ以外では `/models` から調べます。複数モデルがあれば `--model MODEL_ID` を指定してください。
+- 接続先が別のPCでも利用できます。**そのサーバーには物語解析用の本文チャンクと、短い語形の評価候補が送られます。** HTTP自体は暗号化されないので、送信先とネットワークを確認してください。
+- `--check` は合成データのみで接続テストし、コーパスを開きません。
+- 標準モード `fast` は一部の作品・場面から構造を探索するため、従来の全チャンク二重解析よりLLM呼び出しを減らせます。実際の所要時間・作風再現性はモデルと資料に依存します。
+
+### 語彙を完全に抽出したい場合
+
+```bash
+python3 -m pip install 'fugashi[unidic-lite]'
+```
+
+その後、通常のコマンドに `--morphology fugashi` を追加してください。形態素解析を明示的に有効にすると、原文の**出現語形すべて**（辞書の解析単位ごと）の作品内頻度・作品数を `lexical_inventory.jsonl` に保存します。ライブラリなしでも記号・顔文字候補・反復・表記揺れの正確な文字列計測は動きますが、全単語一覧は作りません。
+
+## パイプライン
+
+| 工程 | 解析すること | モデル呼び出し |
+| --- | --- | --- |
+| 1. 文体統計 | 文長、会話率、改行、句読点、文字種、接続表現 | 0 |
+| 2. 語彙・表記 | 全語彙、短い連語、文末、`♡♡`、`♪♪`、顔文字、`っ/ッ`、指定した表記ペア | 0 |
+| 3. 語彙の言語感覚評価 | 短い語形が一般的な日本語として「普通・目立つ・珍しい」か、何の効果を持つか | デフォルト96候補を24件ずつ、最大約4回 |
+| 4. ナラティブ探索 | 選んだ場面の自由記述の構成技法、再出現した候補の証拠検査 | デフォルト最大36回の探索＋最大16回の検証 |
+| 5. 執筆ガイド統合 | 全部を `style_bible.md` に結合 | 0 |
+
+工程3の「一般的な日本語らしさ」は **LLMの事前学習による言語感覚の推定** です。日本語社会全体の実測頻度でも、作者固有性の証明でもありません。作品内出現回数・複数作品での再出現はPythonで独立に計測します。対照コーパスを持たなくてもモデル評価は使えますが、真の相対頻度が必要なら `--reference` が使えます。
+
+記号や表記揺れは **Unicodeを正規化せず** に計測します。したがって `♡` と `♥`、`来たっ！` と `来たッ！`、`じゃねえか` と `じゃあねえか` を区別します。デフォルトの比較ペアに加え、`--variants variants.json` で `[ ["表記A", "表記B"], ... ]` の形で比較対象を増やせます。比較は各表現の完全一致によるものです。
+
+## 主な生成ファイル
+
+```text
+.pastiche-private/profile/
+├── style_profile.json               # 文長・句読点などの数値
+├── lexical_profile.json             # 記号、表記揺れ、語彙・連語の分布
+├── lexical_inventory.jsonl          # 辞書による全出現語形（fugashi導入時のみ）
+├── lexical_candidates.json          # モデル評価に回す短い表現
+├── lexical_judgments.json           # LLMの一般的な語感による判定
+├── lexical_bible.md                 # 実測値だけの書き方ガイド
+├── lexical_interpretation.md        # LLMによる語感評価、利用できたときのみ
+├── narrative_rules.json            # 構造規則の仮説・証拠ID
+├── narrative_audit.json            # 呼び出し件数・検証件数
+├── style_bible.md                  # 統合ガイド
+├── narrative_progress.json         # 進捗
+└── *_checkpoint.sqlite3            # 中断時に再開するためのデータ
+```
+
+**注意：** `lexical_inventory.jsonl` や候補JSONには原文に登場する短い表現が含まれます。外部公開・Gitコミットはしないでください。出力先はGit管理外を推奨します。
+
+## 速度と精度を調整する
+
+```bash
+# Pythonだけで全作品の文体・記号・語彙を分析（モデル不要）
+python3 skills/pastiche-profile/scripts/run.py /path/to/corpus --mode none
+
+# より多くの作品を調べる（品質を追求、速度は落ちる）
 python3 -u skills/pastiche-profile/scripts/run.py /path/to/corpus \
-  --api-base http://192.168.1.20/llm/v1
+  --api-base http://model-server.example/llm/v1 \
+  --narrative-works 30 --chunks-per-work 3
+
+# 旧方式：すべてのチャンクで事象グラフの抽出と検証（最も重い）
+python3 -u skills/pastiche-profile/scripts/run.py /path/to/corpus \
+  --api-base http://model-server.example/llm/v1 --mode full
+
+# 語彙の言語感覚判定は不要なら省く（語彙統計は維持）
+python3 -u skills/pastiche-profile/scripts/run.py /path/to/corpus \
+  --api-base http://model-server.example/llm/v1 --no-lexical-review
+
+# すべての適格な語形候補をLLMに評価させる（大量の呼び出しに注意）
+python3 -u skills/pastiche-profile/scripts/run.py /path/to/corpus \
+  --api-base http://model-server.example/llm/v1 --lexical-review-limit 0
 ```
 
-このコマンドが **文体の計量分析 → モデルで構造抽出 → 執筆ガイド作成** を順番に行います。
-APIの**ベースURL**だけ指定すれば、`/chat/completions` の付加、OpenAI互換/Ollamaの判別、モデルIDの選択を自動化します。
+通常のナラティブ高速モードは最大18作品、各2チャンクをサンプリングし、複数作品に現れた候補にだけ再検証を行います。固定13種類のOperationへの押し込みをやめ、抽象的な構成技法を自由記述で発見します。複数の異なる規則が似た文章で表される場合、単純な類似文字列のクラスタリングが失敗することがあります。また、標本抽出で稀な技法や長距離の伏線を見落とす可能性があります。**推論回数の削減と解析精度の維持は別問題**です。
 
-モデルIDは、該当URLと一致する `~/.pi/agent/models.json` を優先し、そこに無ければサーバーの `/models` を確認します。候補が複数の場合だけ `--model MODEL_ID` を指定。モデルIDを推測しないでください。
+中断したら**同じコマンドで再実行**してください。処理済みチャンクと語彙評価バッチはSQLiteに残ります。`--restart` を指定したときのみ対応チェックポイントを破棄します。`--timeout 0` が既定で、モデルの待機時間上限は設けません（実行環境側の制限とは別）。15秒ごとに状態を報告します。
 
-**`--allow-remote`、`--allow-insecure-http` の指定は不要**です。指定したURLを送信先として扱います。本文チャンクがそのサーバーに送信されるため、接続先を確認してください。HTTP自体は暗号化されません。
-
-`--out /path/to/profile` で保存先変更可能。既定は `.pastiche-private/profile`。処理中に進捗を表示し、チャンクごとのチェックポイントがあるので、途中で中断しても**同じコマンドを再実行**すれば続きから処理します。
-
-### 接続だけ確認したい
-
-```bash
-python3 skills/pastiche-profile/scripts/run.py /path/to/corpus \
-  --api-base http://192.168.1.20/llm/v1 --check
-```
-
-`--check` は合成JSONを問い合わせ、**コーパスを読み込みません**。
-
-## Agent Skillsから使う
+## Agent Skillsでの利用
 
 ```bash
 npx skills add zkamiyama/pastiche-skills
 ```
 
-> pastiche-profileを使って、指定したTXTフォルダから作風プロファイルを作ってください。APIベースURLは `http://192.168.1.20/llm/v1`。結果は `.pastiche-private/profile` に保存。
+> pastiche-profileを使って `/path/to/corpus` の作風プロファイルを作って。APIベースURLは `http://model-server.example/llm/v1`。表記、語彙の一般的な語感、ナラティブの共通パターンまで分析して。
 
-Skillは `scripts/run.py` を直接実行します。三つの処理を人間に逐一指示させたり、モデル名を推測したりする必要はありません。
+> pastiche-writeを使って `style_bible.md` に従い、指定した新規プロットの短編を書いて。実測の語彙・表記傾向も、内容に合う範囲で反映して。
 
-## 出力
+**Agentはインストール済みのスクリプトを実行し、エラーを解消するために勝手に編集しないでください。** APIベースURLは `run.py` にそのまま渡します。接続の問題を勝手なモデル名やパス変更で回避せず、診断情報と修正候補を示してください。コードの修正は、この公開リポジトリ側でテストしてから配布します。
 
-```text
-.pastiche-private/profile/
-├── style_profile.json           # 文体統計
-├── narrative_rules.json         # 作品横断の抽象ルール
-├── narrative_audit.json         # 解析・検証件数
-├── style_bible.md               # 執筆時に使用するガイド
-├── narrative_progress.json      # 進捗
-└── narrative_checkpoint.sqlite3 # 中断再開
-```
+研究と限界：[docs/research.md](docs/research.md) · [Lexical Method](skills/pastiche-profile/references/METHOD.md) · [Narrative Method](skills/pastiche-profile/references/NARRATIVE_METHOD.md)。合成データによるテスト：`python3 -m unittest discover -s tests -v`。
 
-ルールにはモデル自身による二段階の照合を使います。`model_supported` は人手による検証済みという意味ではありません。人物や筋書きなど、原文独自の表現を再利用しないための確認も別途必要です。
-
-## トラブルシューティング
-
-- `model ID unavailable`：`--model 実際のモデルID` を付けるか、Piの `models.json` の `baseUrl` を確認。
-- `HTTP 404`：APIベースURLを確認。リバースプロキシの `/llm/` のようなサブパスは削除しない。
-- `HTTP 401/403`：必要ならAPIキーを環境変数に入れ、`--api-key-env ENV_NAME` を指定（リモートへキーを送るときはHTTPS）。
-- ストリーミングに非対応：`--no-stream`。
-- 応答に時間がかかる：既定の `--timeout 0` は読み取り待ち無制限。進捗JSONを確認し、必要なら再実行。
-
-## 詳細・研究
-
-文体統計だけなら `python3 skills/pastiche-profile/scripts/pastiche.py profile /path/to/corpus --out .pastiche-private/profile`。
-詳細は [pastiche-profile](skills/pastiche-profile/SKILL.md)、[pastiche-write](skills/pastiche-write/SKILL.md)、[構造抽出方法](skills/pastiche-profile/references/NARRATIVE_METHOD.md)、[研究資料](docs/research.md)。
-テストは `python3 -m unittest discover -s tests -v`。
-MIT License。
+MIT License ([LICENSE](LICENSE))。

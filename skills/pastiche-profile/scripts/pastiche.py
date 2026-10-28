@@ -405,8 +405,19 @@ def command_guide(args: argparse.Namespace) -> int:
     profile = safe_profile(json.loads(args.profile.read_text(encoding="utf-8")))
     notes = load_notes(args.notes)
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(drafting_guide(profile, notes), encoding="utf-8")
-    print(f"Style guide saved: {args.out.resolve()}; only evidence-filtered narrative rules incorporated")
+    content = drafting_guide(profile, notes)
+    if args.lexical:
+        lex = args.lexical.read_text(encoding="utf-8")
+        if len(lex) > 80_000:
+            raise ValueError("lexical guide is too large")
+        content += "\n---\n\n" + lex
+    if args.lexical_review:
+        interpretation=args.lexical_review.read_text(encoding="utf-8")
+        if len(interpretation)>80_000:
+            raise ValueError("lexical interpretation is too large")
+        content += "\n---\n\n"+interpretation
+    args.out.write_text(content, encoding="utf-8")
+    print(f"Style guide saved: {args.out.resolve()}; evidence-filtered narrative rules and selected lexical features incorporated")
     return 0
 
 
@@ -429,6 +440,8 @@ def main(argv: list[str] | None = None) -> int:
     g = sub.add_parser("guide", help="Re-render prompt guide from the profile and verified notes")
     g.add_argument("--profile", type=Path, required=True)
     g.add_argument("--notes", type=Path, required=False)
+    g.add_argument("--lexical", type=Path, help="Optional private lexical_bible.md (may contain exact short expressions)")
+    g.add_argument("--lexical-review", type=Path, help="Optional model-language-impression lexical_interpretation.md")
     g.add_argument("--out", type=Path, default=Path(".pastiche-private/style_bible.md"))
     args = parser.parse_args(argv)
     try:
