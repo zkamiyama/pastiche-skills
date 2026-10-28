@@ -18,7 +18,7 @@ The default `run.py --mode llm` now runs both paths:
 
 `--skip-story` retains the previous style-only workflow. The old `fast`, `full`
 (legacy local-device extractor), and `none` modes are unchanged. In particular,
-legacy `--mode full` is not the new hierarchical workbench.
+the retired full/fast algorithms are removed in v3; use the current hierarchical workbench.
 
 The default full-story work proceeds as follows:
 

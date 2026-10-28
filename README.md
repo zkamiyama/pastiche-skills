@@ -2,6 +2,14 @@
 
 日本語TXTコーパスから **文体・情感・全文の物語構造・出典付き人物グラフ**を作り、新しい題材の執筆へつなぐ Agent Skills。Python 3.10以降。原文をリポジトリへ置く必要はありません。
 
+## v3: 認識・信念と実行方式
+
+世界状態と人物の信念を分離しました。未観測の出来事で人物の信念を更新せず、情報を「聞いた」と「信じた」も区別します。読者への開示は提示順で管理し、内面・台詞には人物別の制限コンテキストを渡せます。宣言された観測・知識を機械検証し、本文との一致は追加のLLM監査で確認します。完全な心の理論の実装ではありません。
+
+`--executor subagent --task-dir /private/tasks` で、HTTP不要のホスト・サブエージェント連携も利用できます。コードが子エージェントを直接起動するのではなく、終了コード75でprivateな作業を受け渡し、結果登録後に再開します。
+
+[設計・コマンド・v3への移行](docs/PERSPECTIVES_AND_EXECUTORS.md)。旧 `fast/full` コードは削除し、人間のレビューを持つDBは維持しています。
+
 ## 始め方
 
 ```bash
@@ -17,7 +25,7 @@ python3 -u skills/pastiche-profile/scripts/run.py /path/to/corpus \
 
 - TXTはUTF-8またはCP932。出力はGit管理外の非公開フォルダを推奨します。
 - APIベースURLの `/llm/v1` 等の接頭辞を保持し、`/chat/completions` を補います。Ollamaの `/api/generate` にも対応します。
-- モデル名省略時はPi設定またはサーバーの `/models` から検出。複数候補なら `--model` で選択してください。
+- HTTP実行時、モデル名省略時はPi設定またはサーバーの `/models` から検出。複数候補なら `--model` で選択してください。
 - `--check` は合成JSONだけで通信確認し、コーパスを読みません。
 - 初回は必要に応じて `fugashi-plus[unidic-lite]` を専用キャッシュvenvに導入。オフライン等では `--no-auto-install --morphology none` で全文語彙一覧なしの計測ができます。
 
@@ -61,6 +69,7 @@ python3 skills/pastiche-profile/scripts/workbench.py serve --out /path/to/new-de
 | `pastiche-profile` | 文体、情感、全文の物語構造、人物主張を抽出 |
 | `character-research` | ホストのWeb検索で原典や参照リンクを芋づる式に調査し、許可ドメイン内の公開HTML・テキストを取得して出典付きの自動採用候補を作る |
 | `pastiche-graph-review` | エディタ上で出典・作品版・時点を確認し、必要な主張を使用停止・訂正・却下。自動採用を含めて利用可能な情報を出力 |
+| `pastiche-llm-worker` | ホストのサブエージェントへprivateなJSONタスクを委譲・取り込み・再開 |
 | `pastiche-write` | 抽象的な構造、文体ガイド、自動採用・人間修正済み人物制約から新作を計画・執筆・監査 |
 
 新しい補助Skillは共通エンジンを使います。`pastiche-profile` も一緒にインストールしてください。別配置では `PASTICHE_PROFILE_SCRIPTS` をそのscriptsディレクトリに設定できます。
@@ -90,8 +99,7 @@ profile/
 ├── story_audit.json
 ├── story_progress.json
 ├── style_llm_audit.json
-├── narrative_audit.json
-├── narrative_progress.json
+├── llm_progress.json
 └── style_bible.md                  # 統合ガイド
 ```
 
@@ -120,7 +128,7 @@ python3 skills/pastiche-profile/scripts/run.py /path/to/corpus --mode none
 | `--llm-workers` | 1 | 段階内の最大同時LLM要求数 |
 | `--skip-story` | 無効 | 明示した場合だけ全文構造・人物経路を省略 |
 
-`--mode fast/full` は旧方式の比較・互換用に残します。`--no-lexical-review` は短い語形の一般語感判定だけを省略します。詳しい構造解析・調査・執筆コマンドは [技術仕様](docs/STORY_CHARACTER_WORKBENCH.md) を参照してください。
+`--mode fast/full` はv3で削除しました。現在の `llm` とローカル計測の `none` のみを提供します。`--no-lexical-review` は短い語形の一般語感判定だけを省略します。詳しい構造解析・調査・執筆コマンドは [技術仕様](docs/STORY_CHARACTER_WORKBENCH.md) を参照してください。
 
 **World Knowledge Graphを追加しました。** 場所・組織・国家・時代・文化・技術／魔法・資源を、条件・例外・出典付きの主張として人物・出来事に接続します。自動採用が既定で、人間は必要な設定だけ訂正・使用停止できます。詳細は [World Knowledge Graph](docs/WORLD_KNOWLEDGE_GRAPH.md)。
 

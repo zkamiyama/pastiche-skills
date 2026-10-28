@@ -156,7 +156,7 @@ class LlmStyleTests(unittest.TestCase):
         self.assertEqual(audit["discovered_observations"], 18)
         self.assertEqual(audit["verified_groups"], 3)
         self.assertEqual(audit["supported_by_dimension"]["emotion"], 1)
-        self.assertTrue((self.out / "narrative_audit.json").exists())
+        self.assertTrue((self.out / "style_llm_audit.json").exists())
         self.assertTrue((self.out / "qualitative_bible.md").exists())
         summary = json.loads((self.out / "qualitative_summary.json").read_text())
         self.assertEqual(len(summary["sections"]), 3)
@@ -223,7 +223,7 @@ class LlmStyleTests(unittest.TestCase):
     def test_invalid_cluster_ids_fail_and_do_not_corrupt_artifacts(self):
         with self.assertRaisesRegex(ValueError, "invented/duplicated IDs"):
             self.analyze(FixtureModel(invalid_groups=True))
-        progress = json.loads((self.out / "narrative_progress.json").read_text())
+        progress = json.loads((self.out / "llm_progress.json").read_text())
         self.assertEqual(progress["state"], "failed")
         self.assertFalse((self.out / "qualitative_patterns.json").exists())
 

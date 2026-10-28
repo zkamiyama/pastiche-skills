@@ -19,7 +19,8 @@ from unittest.mock import patch
 SCRIPTS = Path(__file__).resolve().parents[1] / 'skills' / 'pastiche-profile' / 'scripts'
 sys.path.insert(0, str(SCRIPTS))
 from story_workbench.store import Store, Conflict, segments, chunked, atomic_json
-from story_workbench.protocol import parse_extract, parse_outline, Engine, Task
+from story_workbench.protocol import parse_extract, parse_outline
+from story_workbench.engine import Engine, Task
 from story_workbench.pipeline import analyze, parse_alignment, parse_groups
 from story_workbench.research import public_target, VisibleHTML, Fetcher, crawl, research
 from story_workbench.server import make_server
@@ -57,6 +58,7 @@ class Model:
                          'before': '予測を信じている', 'after': '予測を疑い始める', 'actors': ['a'], 'story_time': None, 'evidence_ids': refs[:1]},
                         {'id': 'e2', 'summary': '人物は別の判断に向けて動く', 'function': '選択の前提が改められる',
                          'before': '問いを持っている', 'after': '新しい解釈を選ぶ', 'actors': ['a', 'b'], 'story_time': '翌日', 'evidence_ids': refs[-1:]}],
+                    'perspectives': [],
                     'claims': [
                         {'subject': 'a', 'object': 'b', 'kind': 'relationship', 'predicate': 'trusts', 'value': '相手の説明を判断材料にする', 'epistemic': 'inferred', 'evidence_ids': refs[:1]},
                         {'subject': 'a', 'object': None, 'kind': 'voice', 'predicate': 'speaks', 'value': '返答を短くして判断を留保する', 'epistemic': 'inferred', 'evidence_ids': refs[-1:]}],
@@ -86,7 +88,7 @@ class Model:
                 return {'checks': [{'step': i, 'supported': not self.reject, 'evidence_ids': list(dict.fromkeys(qs)) if not self.reject else []} for i, qs in sorted(grouped.items())]}
             if prompt.startswith('TASK=WRITE_PLAN'):
                 return sample_plan()
-            if prompt.startswith('TASK=DRAFT_AUDIT'):
+            if prompt.startswith(('TASK=DRAFT_AUDIT','TASK=PLAN_PERSPECTIVE_CHECK')):
                 return {'issues': []}
             # Existing qualitative pipeline fixture, preserving full default CLI.
             from test_llm_style import FixtureModel
@@ -102,12 +104,16 @@ def sample_context():
 def sample_plan():
     return {'premise': '駅で待つ人物が手紙の意味を考える新作', 'pattern_ids': [],
             'characters': [{'id': 'a', 'name': '新しい人物', 'reference_id': None}],
-            'facts': [{'id': 'f', 'description': '列車が遅れている', 'known_by_initial': [], 'reader_knows_initial': False}],
             'scenes': [
-                {'id': 's1', 'summary': '知らせを受け取る', 'function': '前提を提示', 'character_ids': ['a'], 'depends_on': [],
-                 'requires_knowledge': {'a': []}, 'reveals': {'a': ['f']}, 'reader_reveals': ['f']},
-                {'id': 's2', 'summary': '次の行動を考える', 'function': '判断の更新', 'character_ids': ['a'], 'depends_on': ['s1'],
-                 'requires_knowledge': {'a': ['f']}, 'reveals': {}, 'reader_reveals': []}],
+                {'id': 's1', 'summary': '遅延の掲示を読む', 'function': '前提を提示', 'character_ids': ['a'], 'depends_on': []},
+                {'id': 's2', 'summary': '次の行動を考える', 'function': '判断の更新', 'character_ids': ['a'], 'depends_on': ['s1']}],
+            'epistemic': {'schema': 'pastiche.epistemic.timeline.v1',
+                'facts': [{'id': 'f', 'description': '列車の運行状態', 'values': ['通常', '遅延'], 'initial_world': '遅延'}],
+                'initial_beliefs': [], 'events': [
+                    {'id': 'e1', 'scene_id': 's1', 'order': 0, 'participants': ['a'], 'access': {'a': ['reading']},
+                     'observations': [{'agent': 'a', 'fact': 'f', 'channel': 'reading'}], 'reader_reveals': ['f']},
+                    {'id': 'e2', 'scene_id': 's2', 'order': 1, 'participants': ['a'], 'access': {},
+                     'requires': [{'agent': 'a', 'fact': 'f', 'value': '遅延', 'mode': 'knows'}]}]},
             'plot_tree': [{'id': 'root', 'parent': None, 'scene_ids': []},
                           {'id': 'phase', 'parent': 'root', 'scene_ids': ['s1', 's2']}]}
 
@@ -410,8 +416,8 @@ class ResearchTests(Fixture):
 class WritingTests(Fixture):
     def test_valid_plan_and_knowledge_leak(self):
         p=sample_plan();validate_plan(p,sample_context())
-        p['scenes'][0]['requires_knowledge']={'a':['f']}
-        with self.assertRaisesRegex(ValueError,'before acquiring'):validate_plan(p,sample_context())
+        p['epistemic']['events'][0]['requires']=[{'agent':'a','fact':'f','value':'遅延','mode':'knows'}]
+        with self.assertRaisesRegex(ValueError,'unavailable'):validate_plan(p,sample_context())
 
     def test_tree_and_unapproved_references(self):
         p=sample_plan();p['plot_tree'][1]['scene_ids']=['s1']

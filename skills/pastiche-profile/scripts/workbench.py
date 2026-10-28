@@ -5,33 +5,11 @@ import argparse
 import json
 from pathlib import Path
 import sys
+from execution import add_model_flags, model_from
+from task_transport import TasksPending, add_task_commands, task_command
 
 from story_workbench import VERSION
 from story_workbench.store import Store, segments, atomic_json, dump
-
-
-def model_flags(p):
-    p.add_argument('--api-base', required=True)
-    p.add_argument('--backend', choices=('auto', 'ollama', 'openai-compatible'), default='auto')
-    p.add_argument('--model')
-    p.add_argument('--api-key-env')
-    p.add_argument('--timeout', type=int, default=0)
-    p.add_argument('--retries', type=int, default=2)
-    p.add_argument('--llm-workers', type=int, default=1)
-    p.add_argument('--progress-interval', type=float, default=15)
-    p.add_argument('--max-output-tokens', type=int, default=0)
-    p.add_argument('--no-stream', action='store_true')
-
-
-def model_from(args):
-    import run
-    import narrative_fast
-    backend, endpoint, base, metadata = run.resolve_url(args.api_base, args.backend)
-    name = run.model_id(args.model, base, backend, metadata)
-    print('[workbench] Selected passages/abstract records will be sent only to the configured model endpoint.', file=sys.stderr)
-    return narrative_fast.LimitedModel(backend, name, endpoint, args.timeout, allow_remote=True,
-                                      allow_insecure_http=True, api_key_env=args.api_key_env,
-                                      stream=not args.no_stream, max_output_tokens=args.max_output_tokens)
 
 
 def demo(out):
@@ -98,7 +76,7 @@ def main(argv=None):
     a.add_argument('--story-panel-size', type=int, default=12)
     a.add_argument('--story-rounds', type=int, default=3)
     a.add_argument('--restart', action='store_true')
-    model_flags(a)
+    add_model_flags(a)
     r = commands.add_parser('research', help='follow approved public source links, then extract pending character claims')
     r.add_argument('--out', type=Path, required=True)
     r.add_argument('--seed', action='append', required=True)
@@ -111,7 +89,7 @@ def main(argv=None):
     r.add_argument('--depth', type=int, default=1)
     r.add_argument('--delay', type=float, default=2)
     r.add_argument('--allow-http', action='store_true')
-    model_flags(r)
+    add_model_flags(r)
     wr = commands.add_parser('world-research', help='bounded public source research for world rules, geography and institutions')
     wr.add_argument('--out', type=Path, required=True)
     wr.add_argument('--seed', action='append', required=True)
@@ -124,7 +102,7 @@ def main(argv=None):
     wr.add_argument('--depth', type=int, default=1)
     wr.add_argument('--delay', type=float, default=2)
     wr.add_argument('--allow-http', action='store_true')
-    model_flags(wr)
+    add_model_flags(wr)
     wx = commands.add_parser('world-export', help='refresh scoped world graph/bible from current reviewed or auto-accepted claims')
     wx.add_argument('--out', type=Path, required=True)
     wx.add_argument('--canon-scope', required=True)
@@ -144,7 +122,7 @@ def main(argv=None):
     w.add_argument('--out', type=Path, required=True)
     w.add_argument('--context', type=Path, required=True)
     w.add_argument('--brief', type=Path, required=True)
-    model_flags(w)
+    add_model_flags(w)
     v = commands.add_parser('audit-plan', help='offline validation of tree coverage, declared chronology and knowledge')
     v.add_argument('--plan', type=Path, required=True)
     v.add_argument('--context', type=Path, required=True)
@@ -152,12 +130,34 @@ def main(argv=None):
     d = commands.add_parser('audit-draft', help='LLM review with citations to actual new-draft passages')
     for flag in ('out', 'draft', 'plan', 'context'):
         d.add_argument('--'+flag, type=Path, required=True)
-    model_flags(d)
+    add_model_flags(d)
     d = commands.add_parser('demo', help='make a new private synthetic editor fixture, without network access')
     d.add_argument('--out', type=Path, required=True)
+    ep = commands.add_parser('perspectives', help='simulate a declared plan without an LLM')
+    ep.add_argument('--plan', type=Path, required=True)
+    ep.add_argument('--out', type=Path, required=True)
+    view = commands.add_parser('scene-context', help='export a private viewpoint or an explicit director view')
+    view.add_argument('--plan', type=Path, required=True)
+    view.add_argument('--scene-id', required=True)
+    view.add_argument('--character-id', help='required except for explicit --director')
+    view.add_argument('--director', action='store_true')
+    view.add_argument('--out', type=Path, required=True)
+    add_task_commands(commands.add_parser('tasks', help='private host-subagent JSON handoff'))
     args = p.parse_args(argv)
     try:
-        if args.command == 'analyze':
+        if args.command in {'perspectives', 'scene-context'}:
+            from story_workbench.epistemic import simulate, scene_view
+            plan = json.loads(args.plan.read_text(encoding='utf-8'))
+            if args.command == 'perspectives':
+                result = simulate(plan['epistemic'], plan['scenes'], plan['characters'])
+            else:
+                if bool(args.character_id) == args.director:
+                    raise ValueError('select --character-id OR --director')
+                result = scene_view(plan, args.scene_id, args.character_id)
+            atomic_json(args.out, result)
+        elif args.command == 'tasks':
+            result = task_command(args)
+        elif args.command == 'analyze':
             from story_workbench.pipeline import analyze
             result = analyze(args.corpus, args.out, model_from(args), scope=args.canon_scope,
                 chunk_chars=args.chunk_chars, workers=args.llm_workers, retries=args.retries, interval=args.progress_interval,
@@ -204,6 +204,9 @@ def main(argv=None):
             result = demo(args.out)
         print(dump(result))
         return 0
+    except TasksPending:
+        print("Waiting for host subagent results; rerun after submission.", file=sys.stderr)
+        return TasksPending.exit_code
     except (ValueError, TypeError, KeyError, OSError) as exc:
         print(f'error: {exc}', file=sys.stderr)
         return 2
