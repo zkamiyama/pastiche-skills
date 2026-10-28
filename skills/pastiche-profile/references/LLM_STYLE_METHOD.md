@@ -48,6 +48,10 @@ All cache writes and final aggregation occur on the main thread, even when LLM H
 
 Both group audit and source check use the **same chosen model**, even though they are separate prompts. This is NOT independent verification by a human and can reproduce the model's biases. Evidence IDs merely reference positions and cannot prove the interpretation is correct.
 
+## Phase D: Grounded cross-work summary
+
+When any pattern is source-screened, one more LLM call summarizes only **supported abstract patterns**, never the original text. It returns at most one section per dimension, including an actionable writing-use description and exact `pattern_ids`. Python validates that each citation exists, belongs to the same dimension and is supported; hallucinated or mismatched IDs cause failure rather than becoming ungrounded style advice. The validated result is stored in `qualitative_summary.json` and appears in `qualitative_bible.md` above the detailed pattern list. If no pattern is supported, no summary request is sent.
+
 ## Outputs and validation
 
 | File | Meaning |
@@ -55,6 +59,7 @@ Both group audit and source check use the **same chosen model**, even though the
 | `qualitative_observations.json` | Every accepted local observation, no long source |
 | `qualitative_patterns.json` | Grouped hypotheses and model-supported patterns, sample coverage and work-level evidence |
 | `qualitative_bible.md` | Optional reusable qualitative methods from `model_supported` only |
+| `qualitative_summary.json` | LLM-authored, cross-work guidance citing supported pattern IDs |
 | `narrative_rules.json` | Model-supported narrative patterns + separated hypotheses (`pastiche.narrative.v2`) |
 | `style_llm_audit.json` | Stage-specific calls/cache hits, number of groups and source-confirmed patterns |
 | `narrative_audit.json` | Same LLM-first audit (compatibility) |
