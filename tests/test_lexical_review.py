@@ -3,6 +3,8 @@ from pathlib import Path
 import re
 import sys
 import tempfile
+import threading
+import time
 import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -78,5 +80,57 @@ class LexicalReviewTests(unittest.TestCase):
         self.assertGreater(lexical_review.style_signal({'typicality':'unusual',
             'work_count':3,'role':'emphasis'}), lexical_review.style_signal({
             'typicality':'ordinary','work_count':3,'role':'general_word'}))
+
+
+class SlowModel(FakeModel):
+    def __init__(self):
+        super().__init__()
+        self.lock=threading.Lock()
+        self.active=0
+        self.peak=0
+
+    def ask(self,prompt):
+        with self.lock:
+            self.active+=1
+            self.peak=max(self.peak,self.active)
+        try:
+            time.sleep(0.02)
+            return super().ask(prompt)
+        finally:
+            with self.lock:
+                self.active-=1
+
+
+class ParallelLexicalReviewTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture=LexicalReviewTests()
+        self.fixture.setUp()
+        self.out=self.fixture.out
+        self.file=self.fixture.file
+
+    def tearDown(self):
+        self.fixture.tearDown()
+
+    def test_parallel_batches_keep_source_order_and_cache(self):
+        model=SlowModel()
+        result=lexical_review.assess(
+            self.file,self.out,model,batch_size=1,llm_workers=3,
+            retries=0,progress_interval=0)
+        self.assertGreater(model.peak,1)
+        self.assertLessEqual(model.peak,3)
+        self.assertEqual(result['actual_model_calls_this_run'],5)
+        self.assertEqual([x['id'] for x in result['assessments']],
+                         [f'L{i:04d}' for i in range(1,6)])
+        replay=FakeModel()
+        cached=lexical_review.assess(
+            self.file,self.out,replay,batch_size=1,llm_workers=4,
+            retries=0,progress_interval=0)
+        self.assertEqual(cached['actual_model_calls_this_run'],0)
+        self.assertEqual(cached['restored_batches'],5)
+        self.assertEqual(len(replay.calls),0)
+
+    def test_rejects_zero_workers(self):
+        with self.assertRaisesRegex(ValueError,'llm-workers'):
+            lexical_review.assess(self.file,self.out,FakeModel(),llm_workers=0)
 
 if __name__=='__main__': unittest.main()
