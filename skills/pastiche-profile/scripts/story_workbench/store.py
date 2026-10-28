@@ -373,7 +373,7 @@ class Store:
                 continue
             selected.append({k: c[k] for k in ("id", "display_subject", "display_object", "predicate", "value", "kind", "epistemic", "status", "model_checked", "observed_at", "valid_from", "valid_to", "evidence_ids")})
         used = {c["display_subject"] for c in selected} | {c["display_object"] for c in selected if c["display_object"]}
-        return {"schema": "pastiche.writer.characters.v1", "scope": scope, "cutoff": cutoff,
+        return {"schema": "pastiche.writer.characters.v2", "scope": scope, "cutoff": cutoff,
                 "entities": [e for e in graph["entities"] if e["id"] in used], "claims": selected,
                 "note": "Auto-accepted source-grounded claims and human-approved edits. Auto-accepted is NOT independently verified or established canon; stale/revoked/rejected/deferred claims are excluded. Unknown duration is not persistence."}
 
