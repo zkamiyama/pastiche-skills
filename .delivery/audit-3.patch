@@ -1,0 +1,284 @@
+diff --git a/skills/pastiche-profile/scripts/story_workbench/context_validation.py b/skills/pastiche-profile/scripts/story_workbench/context_validation.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..b71171e9859539068af4ec98f1659903e67c2fbd
+--- /dev/null
++++ b/skills/pastiche-profile/scripts/story_workbench/context_validation.py
+@@ -0,0 +1,90 @@
++"""Execution-time provenance validation shared by planning and draft auditing."""
++from __future__ import annotations
++from json_boundary import read_object
++from .store import Conflict, position, read_source, uid
++
++
++def current_patterns(store, scope: str) -> list[dict]:
++    """Only current, persisted model-supported patterns; JSON alone is not proof."""
++    path = store.path.parent / 'plot_patterns.json'
++    if not path.exists():
++        return []
++    bundle = read_object(path)
++    versions = bundle.get('source_versions')
++    work_ids = bundle.get('work_ids')
++    if (bundle.get('schema') != 'pastiche.plot.patterns.v1' or bundle.get('scope') != scope
++            or not isinstance(versions, dict) or not versions
++            or not isinstance(work_ids,list) or not work_ids
++            or any(not isinstance(w,str) for w in work_ids)
++            or len(set(work_ids)) != len(work_ids)):
++        raise Conflict('plot provenance is missing or incompatible; reanalyze the corpus')
++    if store.get('artifacts',uid('CORPUS',work_ids)) != bundle:
++        raise Conflict('plot snapshot differs from the persisted analysis')
++    for sid, expected in versions.items():
++        source = store.get('sources',sid)
++        if not source or source['scope'] != scope or source['sha256'] != expected:
++            raise Conflict('plot source version is no longer registered')
++        try:
++            from pathlib import Path
++            actual = read_source(Path(source['path']))[1]
++        except (ValueError,OSError) as exc:
++            raise Conflict('plot source is unavailable; reanalyze the corpus') from exc
++        if actual != expected:
++            raise Conflict('plot source changed; reanalyze the corpus')
++    patterns = bundle.get('patterns')
++    if not isinstance(patterns,list) or any(not isinstance(p,dict) for p in patterns):
++        raise Conflict('invalid persisted plot patterns')
++    return [p for p in patterns if p.get('status') == 'model_supported'
++            and type(p.get('support_count')) is int and p['support_count'] >= 2]
++
++
++def _records(values, name):
++    if not isinstance(values,list) or any(not isinstance(v,dict) or not isinstance(v.get('id'),str) for v in values):
++        raise Conflict('invalid context '+name)
++    if len({v['id'] for v in values}) != len(values):
++        raise Conflict('duplicate context '+name)
++    return values
++
++
++def validate_snapshot(store, context: dict) -> None:
++    if not isinstance(context,dict) or context.get('schema') != 'pastiche.writer.context.v4':
++        raise Conflict('writer context schema changed; export current v4 context')
++    if any(not isinstance(context.get(k),str) or context[k] not in {'original','canon'} for k in ('mode','world_mode')):
++        raise Conflict('invalid context mode; export it again')
++    scope = context.get('scope')
++    if not isinstance(scope,str) or not scope:
++        raise Conflict('context requires a canon scope')
++    cutoff = position(context.get('cutoff'))
++    if cutoff is None:
++        raise Conflict('context requires an explicit cutoff')
++    graph = store.graph()
++    for key,domain in (('characters','character'),('world','world'),('perspectives','epistemic')):
++        section = context.get(key)
++        if not isinstance(section,dict):
++            raise Conflict('context section missing; export it again')
++        current = store._context(scope,cutoff,domain,graph=graph)
++        if any(section.get(k) != current[k] for k in ('schema','scope','cutoff','note')):
++            raise Conflict('context scope/cutoff or schema differs; export it again')
++        selected = _records(section.get('claims'),'claims')
++        entities = _records(section.get('entities'),'entities')
++        available = {c['id']:c for c in current['claims']}
++        known = {e['id']:e for e in current['entities']}
++        if any(available.get(c['id']) != c for c in selected):
++            raise Conflict('writer context is changed, stale or revoked; export it again')
++        if any(known.get(e['id']) != e for e in entities):
++            raise Conflict('context entity identity changed; export it again')
++        required = {c[k] for c in selected for k in ('display_subject','display_object') if c[k]}
++        if domain == 'epistemic':
++            required.update(c[k] for c in selected for k in ('holder','proposition_subject','speaker')
++                            if c[k] and not c[k].startswith('$'))
++        if not required <= {e['id'] for e in entities}:
++            raise Conflict('context omits a referenced entity')
++        if domain == 'world':
++            from .world import conflict_candidates
++            if section.get('conflicts') != conflict_candidates(selected):
++                raise Conflict('context conflict summary changed; export it again')
++    patterns = _records(context.get('plot_patterns'),'plot patterns')
++    if patterns:
++        available = {p['id']:p for p in current_patterns(store,scope)}
++        if any(available.get(p['id']) != p for p in patterns):
++            raise Conflict('plot selection changed or is stale; export it again')
+diff --git a/skills/pastiche-profile/scripts/story_workbench/engine.py b/skills/pastiche-profile/scripts/story_workbench/engine.py
+index c9ff0998c6080787a8b64cf19fc73eb46f28b32c..48fe899b6e477bf594d3af940eedd4a24d0ac709 100644
+--- a/skills/pastiche-profile/scripts/story_workbench/engine.py
++++ b/skills/pastiche-profile/scripts/story_workbench/engine.py
+@@ -7,15 +7,24 @@ import time
+ from typing import Any, Callable
+ import llm_runtime
+ from task_transport import TasksPending
++from json_boundary import object_copy, validate_data
+ from . import VERSION
+ from .store import Store, uid, atomic_json
+ 
+-@dataclass
++@dataclass(frozen=True)
+ class Task:
+     id: str
+     prompt: str
+     validate: Callable[[Any], Any]
+ 
++    def __post_init__(self):
++        if not isinstance(self.id, str) or not self.id.strip() or len(self.id) > 400:
++            raise ValueError('invalid task ID')
++        if not isinstance(self.prompt, str) or not self.prompt or len(self.prompt) > 120_000:
++            raise ValueError('task prompt exceeds the bounded execution contract')
++        if not callable(self.validate):
++            raise ValueError('task needs a domain validator')
++
+ 
+ class Engine:
+     """Bounded provider-neutral execution; pending handoffs are resumable barriers."""
+@@ -29,8 +38,8 @@ class Engine:
+         self.stats = {"attempts": 0, "completed_calls": 0, "cache_hits": 0}
+         self.lock = threading.Lock()
+ 
+-    def key(self, task: Task) -> str:
+-        return uid("task", VERSION, self.model.backend, self.model.model,
++    def key(self, task: Task, stage: str = "") -> str:
++        return uid("task", VERSION, stage, self.model.backend, self.model.model,
+                    getattr(self.model, "endpoint", "fixture"), getattr(self.model, "max_output_tokens", 0), task.prompt)
+ 
+     def _invoke(self, task: Task) -> Any:
+@@ -42,7 +51,9 @@ class Engine:
+                 self.stats["attempts"] += 1
+             try:
+                 raw = self.reporter.call(self.local.model, task.prompt, task.id, retries=0, record_status=False)
+-                return task.validate(raw)
++                value = task.validate(object_copy(raw))
++                validate_data(value)
++                return value
+             except (ValueError, TypeError, KeyError, AttributeError) as exc:
+                 if attempt >= self.retries or not getattr(exc, "transient", True):
+                     raise ValueError(f"{task.id}: model response/transport failed validation ({type(exc).__name__})") from exc
+@@ -50,12 +61,18 @@ class Engine:
+         raise AssertionError("unreachable")
+ 
+     def run(self, stage: str, tasks: list[Task]) -> dict[str, Any]:
++        if not isinstance(tasks, list) or any(not isinstance(t, Task) for t in tasks):
++            raise ValueError('stage tasks must be a list of Task objects')
++        if len({t.id for t in tasks}) != len(tasks):
++            raise ValueError('duplicate task IDs would overwrite stage results')
+         results, pending_jobs = {}, []
+         for task in tasks:
+-            cached = self.store.get("tasks", self.key(task))
++            cached = self.store.get("tasks", self.key(task, stage))
+             if cached is not None:
+                 try:
+-                    results[task.id] = task.validate(cached)
++                    value = task.validate(cached)
++                    validate_data(value)
++                    results[task.id] = value
+                     self.stats["cache_hits"] += 1
+                     continue
+                 except (ValueError, TypeError, KeyError, AttributeError):
+@@ -87,16 +104,21 @@ class Engine:
+                     except Exception as exc:
+                         failure = failure or exc
+                     else:
+-                        self.store.task_put(self.key(task), value)
++                        self.store.task_put(self.key(task, stage), value)
+                         results[task.id] = value
+                         self.stats["completed_calls"] += 1
+                     if failure is None:
+                         submit()
+                     progress()
+         if failure:
++            atomic_json(self.out / "story_progress.json", {"state": "failed", "stage": stage,
++                         "error_type": type(failure).__name__, "total": len(tasks),
++                         "completed": len(results), **self.stats})
+             raise failure
+         if deferred:
+             atomic_json(self.out / "story_progress.json", {"state": "waiting_for_tasks", "stage": stage,
+                          "total": len(tasks), "completed": len(results), **self.stats})
+             raise deferred
++        atomic_json(self.out / "story_progress.json", {"state": "completed", "stage": stage,
++                     "total": len(tasks), "completed": len(results), **self.stats})
+         return results
+diff --git a/skills/pastiche-profile/scripts/story_workbench/epistemic.py b/skills/pastiche-profile/scripts/story_workbench/epistemic.py
+index 4e4c45ed9ae7c9e733947268861c46e8ee254ee1..51f7c39718eb63beca872b3f1c68ef96f3c26e8f 100644
+--- a/skills/pastiche-profile/scripts/story_workbench/epistemic.py
++++ b/skills/pastiche-profile/scripts/story_workbench/epistemic.py
+@@ -7,11 +7,10 @@ revelations separate. It validates declared access, not the meaning of prose.
+ from __future__ import annotations
+ from copy import deepcopy
+ from .store import text, dump
++from .epistemic_schema import normalize, SCHEMA, CHANNELS
+ 
+ BASES = {'perception', 'communication', 'inference', 'narration', 'unknown'}
+-CHANNELS = {'sight', 'hearing', 'reading', 'touch'}
+ RESERVED = {'$world', '$reader'}
+-SCHEMA = 'pastiche.epistemic.timeline.v1'
+ 
+ 
+ def array(v, maximum=1000):
+@@ -107,6 +106,7 @@ def simulate(timeline: dict, scenes: list[dict], characters: list[dict]) -> dict
+     """
+     if not isinstance(timeline, dict) or timeline.get('schema') != SCHEMA:
+         raise ValueError('explicit epistemic timeline v1 required; regenerate legacy plans')
++    timeline = normalize(timeline, scenes, characters)
+     if len(dump(timeline)) > 2_000_000:
+         raise ValueError('epistemic input exceeds the bounded replay budget')
+     agents = {c['id'] for c in characters}
+@@ -152,6 +152,7 @@ def simulate(timeline: dict, scenes: list[dict], characters: list[dict]) -> dict
+     events = array(timeline.get('events'), 1200)
+     if len(events) * max(1, len(agents)) * max(1, len(facts)) > 250_000:
+         raise ValueError('perspective snapshots exceed replay budget; split the plan')
++    snapshot_bytes = 0
+     seen_ids, seen_orders, covered = set(), set(), set()
+     for e in events:
+         if not isinstance(e, dict): raise ValueError('invalid epistemic event')
+@@ -238,8 +239,12 @@ def simulate(timeline: dict, scenes: list[dict], characters: list[dict]) -> dict
+         normalized.append({'id': eid,'scene_id':sid,'order':e['order'],'participants':participants,'access':access,
+             'requires':reqs,'updates':updates,'observations':observations,'messages':messages,
+             'inferences':inferences,'forget':forget,'reader_reveals':reveal})
+-        snapshots.append({'event_id':eid,'scene_id':sid,'order':e['order'],'before':before,
+-            'after':{'world':deepcopy(world),'beliefs':deepcopy(minds),'reports':deepcopy(heard)}})
++        snapshot = {'event_id':eid,'scene_id':sid,'order':e['order'],'before':before,
++            'after':{'world':deepcopy(world),'beliefs':deepcopy(minds),'reports':deepcopy(heard)}}
++        snapshot_bytes += len(dump(snapshot).encode('utf-8'))
++        if snapshot_bytes > 16_000_000:
++            raise ValueError('perspective snapshots exceed byte budget; split the plan')
++        snapshots.append(snapshot)
+     # Reader state follows presentation, not the modeled chronological sequence.
+     reader, reader_views = {}, []
+     by_event = {s['event_id']:s for s in snapshots}
+@@ -260,10 +265,14 @@ def simulate(timeline: dict, scenes: list[dict], characters: list[dict]) -> dict
+                   'Higher-order beliefs, uncertain alternatives and logical entailment are not solved by this ledger.']}
+ 
+ 
+-def scene_view(plan: dict, scene_id: str, agent: str | None = None) -> dict:
++def scene_view(plan: dict, scene_id: str, agent: str | None = None, *, event_id: str | None = None) -> dict:
+     report = simulate(plan['epistemic'], plan['scenes'], plan['characters'])
+     snapshots = [s for s in report['events'] if s['scene_id'] == scene_id]
+     if not snapshots: raise ValueError('unknown scene')
++    if event_id is not None:
++        snapshots = [s for s in snapshots if s['event_id'] == event_id]
++        if not snapshots:
++            raise ValueError('event does not belong to the selected scene')
+     if agent is None:
+         return {'audience':'director','scene_id':scene_id,'events':snapshots,
+                 'reader':[r for r in report['reader'] if r['scene_id']==scene_id]}
+@@ -271,14 +280,16 @@ def scene_view(plan: dict, scene_id: str, agent: str | None = None) -> dict:
+         raise ValueError('unknown viewpoint character')
+     # Do NOT export reality, other minds, future event summaries, or correctness
+     # flags that would reveal that the viewpoint character has a false belief.
+-    visible=set()
+-    views=[]
+-    for s in snapshots:
+-        before=s['before']['beliefs'][agent];after=s['after']['beliefs'][agent]
+-        reports=s['after']['reports'][agent]
+-        visible.update(before);visible.update(after);visible.update(r['fact'] for r in reports)
+-        views.append({'event_id':s['event_id'],'beliefs_before':before,'beliefs_after':after,'heard_reports':reports})
+-    facts=[{'id':f['id'],'description':f['description']} for f in plan['epistemic']['facts'] if f['id'] in visible]
+-    return {'schema':'pastiche.scene.perspective.v1','audience':'character','scene_id':scene_id,
+-            'character_id':agent,'facts':facts,'events':views,
+-            'rule':'Only this viewpoint is available. No access to objective world or other minds; do not correct false beliefs from external knowledge.'}
++    # The writer starts BEFORE the first event in a scene (or an explicitly
++    # selected event). Exporting all after-states leaks discoveries from later
++    # in the same scene into earlier dialogue, even though they are "own" beliefs.
++    selected = snapshots[0]
++    beliefs = selected['before']['beliefs'][agent]
++    reports = selected['before']['reports'][agent]
++    visible = set(beliefs) | {r['fact'] for r in reports}
++    facts = [{'id':f['id'],'description':f['description']} for f in report['timeline']['facts'] if f['id'] in visible]
++    return {'schema':'pastiche.scene.perspective.v2','audience':'character','scene_id':scene_id,
++            'character_id':agent, 'at':'before_event',
++            'facts':facts,'events':[{'event_id':selected['event_id'],
++                'beliefs_before':beliefs,'heard_reports':reports}],
++            'rule':'Only this viewpoint at event entry is available. No future discoveries, objective truth or other minds.'}
