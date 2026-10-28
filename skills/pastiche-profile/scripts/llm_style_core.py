@@ -250,3 +250,57 @@ def valid_evidence(raw: Any, item: dict[str, Any],
     return (isinstance(evidence, list) and
             all(isinstance(x, str) and x in allowed for x in evidence) and
             len(set(evidence) & set(item["evidence_ids"])) >= 2)
+
+
+def synthesize_prompt(patterns: list[dict[str, Any]]) -> str:
+    """Summarize only source-screened patterns, never the source corpus."""
+    compact = [{
+        "pattern_id": p["pattern_id"], "dimension": p["dimension"],
+        "trigger": p["trigger"], "mechanism": p["mechanism"],
+        "effect": p["effect"], "support_work_count": p["support_work_count"],
+        "anchors": p.get("anchors", []),
+    } for p in patterns]
+    return (
+        "TASK=STYLE_SYNTHESIZE. These are model-screened, abstract writing "
+        "patterns, NOT source passages. Summarize the recurring choices of "
+        "vocabulary/register, emotional progression, voice/distance, dialogue, "
+        "sensory depiction, pacing and narrative technique where supported. "
+        "Explain HOW they work and HOW to apply them on a different story; "
+        "do not imitate plot, names, quotations or private details. "
+        "Make no author-uniqueness, population-frequency or empirically "
+        "measured reader-response claims. Use only IDs of the supplied "
+        "patterns as evidence. At most one section per supported dimension. "
+        "Omit unsupported dimensions. Each description must be short Japanese "
+        "(8-160 chars). Return ONLY JSON with "
+        '{"sections":[{"dimension":"emotion","summary":"共通の手法",'
+        '"writing_use":"新しい場面への適用方針","pattern_ids":["P0001"]}]}. '
+        "PATTERNS_JSON="
+        + json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
+    )
+
+
+def parse_synthesis(raw: Any, patterns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not isinstance(raw, dict) or not isinstance(raw.get("sections"), list):
+        raise ValueError("STYLE_SYNTHESIZE did not return a sections array")
+    allowed = {p["pattern_id"]: p["dimension"] for p in patterns}
+    seen: set[str] = set()
+    result = []
+    for section in raw["sections"]:
+        if not isinstance(section, dict):
+            raise ValueError("STYLE_SYNTHESIZE returned a non-object section")
+        dim, ids = section.get("dimension"), section.get("pattern_ids")
+        if (dim not in DIMENSIONS or dim in seen
+                or not plain(section.get("summary"), minimum=8, maximum=160)
+                or not plain(section.get("writing_use"), minimum=8, maximum=160)
+                or not isinstance(ids, list) or not ids
+                or not all(isinstance(x, str) and allowed.get(x) == dim for x in ids)
+                or len(ids) != len(set(ids))):
+            raise ValueError("STYLE_SYNTHESIZE returned invalid guidance or evidence IDs")
+        result.append({
+            "dimension": dim, "summary": section["summary"],
+            "writing_use": section["writing_use"],
+            "pattern_ids": sorted(ids)})
+        seen.add(dim)
+    if patterns and not result:
+        raise ValueError("STYLE_SYNTHESIZE returned no evidence-backed summary")
+    return sorted(result, key=lambda x: DIMENSIONS.index(x["dimension"]))
