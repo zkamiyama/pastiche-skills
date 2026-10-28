@@ -1,7 +1,7 @@
 ---
 name: pastiche-write
 description: >-
-  pastiche-profileのstyle_bible.md・qualitative_patterns.json・lexical_profile.json・narrative_rules.jsonを使用し、階層プロット・承認済み人物制約を用いて新規の題材で執筆する。人物の知識・物語の因果を設計し、語彙、表記揺れ、会話末の記号、文末のリズムを文脈に応じて反映し、生成後もローカルで定量確認する。
+  pastiche-profileのstyle_bible.md・qualitative_patterns.json・lexical_profile.json・narrative_rules.jsonを使用し、階層プロット・出典付き人物制約を用いて新規の題材で執筆する。人物の知識・物語の因果を設計し、語彙、表記揺れ、会話末の記号、文末のリズムを文脈に応じて反映し、生成後もローカルで定量確認する。
 license: MIT
 compatibility: Any Agent Skills-compatible text LLM; Python 3.10+ standard library for optional exact-form review (no pip needed).
 ---
@@ -24,7 +24,7 @@ compatibility: Any Agent Skills-compatible text LLM; Python 3.10+ standard libra
 
 利用できる場合は `plot_patterns.json` / `narrative_bible.md` と、現在の出典・作品版でexportされた `writer_context.json` / `character_bible.md` を優先する。個別原作の `story_maps.jsonl` を具体的プロットのテンプレートとしてwriterへ丸ごと渡さない。
 
-人物モードは **original（既定）** と **canon（利用者が明示した既存キャラクター）** を分離する。originalでは新しい人物・事件を設計し、原作固有の人物・出来事の連鎖を移植しない。canonでは選択された作品版・時点の、人間承認済みの人物主張だけを既知の設定として参照する。`pending` や古い出典を設定事実と扱わない。承認済み情報がなくても勝手に一括承認しない。
+人物モードは **original（既定）** と **canon（利用者が明示した既存キャラクター）** を分離する。originalでは新しい人物・事件を設計し、原作固有の人物・出来事の連鎖を移植しない。canonでは選択された作品版・時点の、現在の出典に基づく `auto_accepted` と `human_approved` の主張を参照する。前者は未検証の仮説として扱い、`revoked`・`rejected`・`needs_review` や古い出典は参照しない。ユーザーの訂正・使用停止を優先し、`human_approved` を勝手に捏造しない。
 
 ## Measurement types and priorities
 
