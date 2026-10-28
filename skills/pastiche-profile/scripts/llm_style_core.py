@@ -272,8 +272,11 @@ def synthesize_prompt(patterns: list[dict[str, Any]]) -> str:
         "patterns as evidence. At most one section per supported dimension. "
         "Omit unsupported dimensions. Each description must be short Japanese "
         "(8-160 chars). Return ONLY JSON with "
-        '{"sections":[{"dimension":"emotion","summary":"共通の手法",'
-        '"writing_use":"新しい場面への適用方針","pattern_ids":["P0001"]}]}. '
+        '{"sections":[{"dimension":'
+        + json.dumps(patterns[0]["dimension"])
+        + ',"summary":"根拠に裏づけられた共通の表現操作",'
+        + '"writing_use":"新しい場面で表現方法を選び直す","pattern_ids":'
+        + json.dumps([patterns[0]["pattern_id"]]) + '}]}. '
         "PATTERNS_JSON="
         + json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
     )
