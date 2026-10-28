@@ -213,12 +213,15 @@ def crawl(out: Path, seeds: list[str], domains: set[str], *, max_pages=8, depth=
 
 def research(out: Path, seeds: list[str], domains: set[str], model, *, character: str,
              universe: str, scope: str, source_type="unclassified", max_pages=8, depth=1,
-             delay=2.0, workers=1, retries=2, interval=15.0, allow_http=False, fetcher=None) -> dict:
+             delay=2.0, workers=1, retries=2, interval=15.0, allow_http=False, fetcher=None,
+             target_kind="character") -> dict:
+    if target_kind not in {"character", "world"}:
+        raise ValueError("research target must be character or world")
     if source_type not in {"official", "creator", "licensed", "fan", "unclassified"}:
         raise ValueError("unknown source provenance category")
     out.mkdir(parents=True, exist_ok=True)
     audit_path = out / "research" / "audit.json"
-    audit_base = {"target": character, "universe": universe, "scope": scope, "started_at": now()}
+    audit_base = {"target": character, "target_kind": target_kind, "universe": universe, "scope": scope, "started_at": now()}
     atomic_json(audit_path, {**audit_base, "state": "running"})
     store = None
     try:
@@ -234,10 +237,10 @@ def research(out: Path, seeds: list[str], domains: set[str], model, *, character
                                                  uri=entry["final_url"], source_type=source_type)
             for i, chunk in enumerate(chunked(segments(body), 3800)):
                 key = f"web:{source['id']}:{i}"
-                tasks.append(Task(key, extract_prompt(chunk, task="CHARACTER_WEB", target=character),
+                tasks.append(Task(key, extract_prompt(chunk, task="WORLD_WEB" if target_kind == "world" else "CHARACTER_WEB", target=character),
                                   lambda raw, c=chunk: parse_extract(raw, c)))
                 payload[key] = (source, chunk, i, len(body))
-        results = engine.run("character_web", tasks)
+        results = engine.run(target_kind + "_web", tasks)
         count = 0
         for task in tasks:
             source, chunk, i, length = payload[task.id]
@@ -246,11 +249,14 @@ def research(out: Path, seeds: list[str], domains: set[str], model, *, character
             _, _, claims = ingest(store, source, chunk, results[task.id], i, length,
                                   namespace="web:" + universe, temporal=False)
             count += len(claims)
-        audit = {"state": "completed", "target": character, "universe": universe, "scope": scope,
+        audit = {"state": "completed", "target": character, "target_kind": target_kind, "universe": universe, "scope": scope,
                  "saved_pages": len(saved), "claims": count, **engine.stats,
-                 "note": "Source categories were operator-supplied. All claims await human review; no search was performed by this helper."}
+                 "note": "Source categories were operator-supplied. Claims are auto-accepted but unverified; no search was performed by this helper."}
         atomic_json(out / "research" / "audit.json", audit)
         atomic_json(out / "character_graph.json", store.graph())
+        from .world import export_world
+        audit["world"] = export_world(store, out, scope)
+        atomic_json(out / "research" / "audit.json", audit)
         return audit
     except BaseException as exc:
         atomic_json(audit_path, {**audit_base,

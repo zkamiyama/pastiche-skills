@@ -68,3 +68,15 @@ python3 -u scripts/run.py "/path/to/corpus" \
 統計・定性的な表現方法・抽象的な構造候補を `style_bible.md` に統合する。`pastiche-write` は新規の人物・題材を既定とし、既存キャラクターを使う場合は利用者の明示指定、作品版、時点、および出典付きで利用可能な人物情報（自動採用は未確認の推定）を参照する。元作品の長い文言や具体的な筋書きの転用を避ける。
 
 全文経路・グラフ・研究・執筆の技術仕様は `docs/STORY_CHARACTER_WORKBENCH.md`。文体経路は `references/LLM_STYLE_METHOD.md`、旧方式は `references/NARRATIVE_METHOD.md`。独自実装であり、特定論文やベンチマークの再現を主張しない。合成テストは `python3 -m unittest discover -s tests -v`。
+
+## 世界観（World Knowledge Graph）
+
+全文経路では人物・出来事と同時に世界要素も抽出する。場所・組織・国家・種族・資源・概念・技術／魔法体系・文化・時代を型で区別し、所属関係、地理、制度、法律、歴史、能力制約の根拠を記録する。モデル出力に世界観の配列がない場合、設定が存在しないとみなさずエラーとして扱う。
+
+- 出力: `world_graph.json`、`world_context.json`、`world_bible.md`、`world_audit.json`。DBは既存の `character_graph.sqlite3` を共有する。
+- 法律による禁止、物理・能力上の不可能、人物の信仰・伝聞を混同しない。条件と例外、作中の時期と提示位置を分ける。
+- `auto_accepted` を既定とし、人間の確認済みとは区別。使用停止・訂正・保留・却下は既存エディタの「世界観」タブで行う。
+- 同名・同ジャンルだけで別作品の設定を統合しない。矛盾候補は根拠を見て判断し、モデルに任意の正史を作らせない。
+- 原典調査は別の `world-research` を利用者が明示した場合にだけ実行する。コーパス名を勝手にWebへ送信しない。
+
+実装の境界とコマンドは `docs/WORLD_KNOWLEDGE_GRAPH.md`。更新時のモデルキャッシュ再計算を、人物の人間レビューを消去する理由にしない。

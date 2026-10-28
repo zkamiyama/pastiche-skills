@@ -122,7 +122,7 @@ python3 skills/pastiche-profile/scripts/run.py /path/to/corpus --mode none
 
 `--mode fast/full` は旧方式の比較・互換用に残します。`--no-lexical-review` は短い語形の一般語感判定だけを省略します。詳しい構造解析・調査・執筆コマンドは [技術仕様](docs/STORY_CHARACTER_WORKBENCH.md) を参照してください。
 
-**世界観（地理・組織・歴史・技術／魔法法則・文化）を独立したグラフとして帰納する機能は、まだありません。** 物語概要や人物関係にこれらが登場する場合はあっても、世界設定の整合性まで検証できるわけではありません。
+**World Knowledge Graphを追加しました。** 場所・組織・国家・時代・文化・技術／魔法・資源を、条件・例外・出典付きの主張として人物・出来事に接続します。自動採用が既定で、人間は必要な設定だけ訂正・使用停止できます。詳細は [World Knowledge Graph](docs/WORLD_KNOWLEDGE_GRAPH.md)。
 
 各段階の成功結果はSQLiteへ保存します。中断時は同じコマンドを再実行してください。`--restart` はモデルタスクのキャッシュを再計算する指定で、人間の承認・訂正履歴を消す指示ではありません。`--timeout 0` は既定で無制限のソケット待機です。ハートビートは完了時間の保証ではありません。
 
@@ -139,3 +139,18 @@ python3 -m unittest discover -s tests -v
 合成データの回帰テスト、OS/Python別CI、テスト専用Playwrightによるブラウザ確認を含みます。実行環境にPlaywrightを追加する必要はありません。
 
 設計・検証・セキュリティ: [STORY_CHARACTER_WORKBENCH.md](docs/STORY_CHARACTER_WORKBENCH.md)。文体経路: [LLM Style Method](skills/pastiche-profile/references/LLM_STYLE_METHOD.md)。MIT License。
+
+## 世界観グラフ（2.1）
+
+標準の全文読解で `world_graph.json` / `world_context.json` / `world_bible.md` / `world_audit.json` も生成します。エディタの「世界観」タブで種別・条件・例外・出典・矛盾候補を確認できます。
+
+```bash
+python3 skills/pastiche-profile/scripts/workbench.py serve --out /private/profile
+python3 skills/pastiche-profile/scripts/workbench.py export \
+  --out /private/profile --canon-scope novel:original \
+  --character-mode original --world-mode canon
+```
+
+`--world-mode original`（既定）は新しい世界、`canon` は指定版の世界設定を利用します。人物モードとは独立です。`world-research` Skillでは公式資料を芋づる式に追い、同じグラフへ構造化できます。出典・版・時点が合わない設定や使用停止済みの主張を執筆へ渡しません。
+
+既存のDBは継続利用できます。抽出プロンプトの変更に伴い、関連するLLM処理は更新時に再実行されます。未変更の人物ID・主張ID・人間の判断は保持します。世界観の全矛盾を解決できるわけではなく、文脈・条件・語り手の確認は必要です。

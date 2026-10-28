@@ -60,6 +60,18 @@ class EasyStartTests(unittest.TestCase):
             self.assertEqual(stage[stage.index("--analysis-works") + 1], "0")
             self.assertEqual(stage[stage.index("--chunks-per-work") + 1], "2")
 
+    def test_check_does_not_print_deployment_identifier(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        output = StringIO()
+        with patch.object(run, "model_id", return_value="private-fixture-model"), \
+             patch.object(run.narrative, "LocalModel") as model, redirect_stdout(output):
+            model.return_value.ask.return_value = {"ok": True}
+            code = run.main(["/not-a-corpus", "--api-base", "http://127.0.0.1/v1", "--check"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("private-fixture-model", output.getvalue())
+        self.assertIn("withheld", output.getvalue())
+
     def test_check_sends_only_synthetic_request(self):
         with TemporaryDirectory() as temporary:
             missing = str(Path(temporary) / "not-a-corpus")

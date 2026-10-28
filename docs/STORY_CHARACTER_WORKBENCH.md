@@ -200,3 +200,7 @@ when moving a corpus, re-register/re-analyze it rather than trusting stale paths
 
 Evaluation remains necessary on real models and representative Japanese fiction.
 Synthetic tests check invariants, not literary extraction accuracy.
+
+## World Knowledge Graph extension (2.1)
+
+See [WORLD_KNOWLEDGE_GRAPH.md](WORLD_KNOWLEDGE_GRAPH.md) for typed world entities, conditional assertions, cross-domain memberships, opt-out review, source/era handling and independent writer world modes. The shared DB retains its existing filename. The combined graph schema is now v2; writer context is v3. Legacy character IDs remain unchanged.

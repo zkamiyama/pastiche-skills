@@ -119,3 +119,11 @@ python3 scripts/evaluate_lexical.py \
 - [LLM Style Method](../pastiche-profile/references/LLM_STYLE_METHOD.md) — 質的な作風分析とモデルによる検証の仕組み。
 - [Narrative method](../pastiche-profile/references/NARRATIVE_METHOD.md) — 旧方式の根拠と限界。
 - [Re3](https://aclanthology.org/2022.emnlp-main.296/) / [DOC](https://aclanthology.org/2023.acl-long.190/) — 長い物語を計画と生成に分ける研究。これらをそのまま再実装したものではない。
+
+## 世界設定の選択と検証
+
+`writer_context.json` v3 は `world` と `world_mode` を含む。`--world-mode original`（既定）なら新しい世界を設計し、原作固有の場所・組織・法則の連鎖を流用しない。`canon` は利用者が指定した作品版の世界を使うモード。人物のoriginal/canonとは独立であり、新人物を既存世界へ置くこともできる。
+
+計画の `world_claim_ids` と場面の `world_entity_ids` / `world_claim_ids` は、指定範囲で利用可能なIDだけに限定する。`world_note` には適用条件・例外をどう扱うか記録する。規範による禁止を物理的不可能と混同しない。推測、伝聞、時代不明の設定を絶対的な正史にしない。
+
+執筆前に現行DBから再exportする。使用停止や出典変更がある古いsnapshotは、計画生成・新稿監査時にも拒否される。`audit-draft` の世界観上の指摘は実際の新稿セグメントと設定主張IDを参照し、`writing/world_audit.json` に保存する。スキーマ検証は設定の意味的正しさまで証明しない。
