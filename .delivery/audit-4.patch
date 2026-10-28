@@ -1,0 +1,260 @@
+diff --git a/skills/pastiche-profile/scripts/story_workbench/epistemic_schema.py b/skills/pastiche-profile/scripts/story_workbench/epistemic_schema.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..6a4d608b0a31d7b328a8b5410db89674e7413b56
+--- /dev/null
++++ b/skills/pastiche-profile/scripts/story_workbench/epistemic_schema.py
+@@ -0,0 +1,128 @@
++"""Closed, detached input contract for first-order epistemic replay.
++
++Normalize once before replay. Reject misspelled operations rather than silently
++losing a state change. Presentation order is independent of causal chronology.
++"""
++from __future__ import annotations
++from copy import deepcopy
++from json_boundary import validate_data
++from .store import text
++
++SCHEMA = 'pastiche.epistemic.timeline.v1'
++CHANNELS = {'sight', 'hearing', 'reading', 'touch'}
++
++
++def rows(value, limit=1000):
++    if not isinstance(value, list) or len(value) > limit:
++        raise ValueError('invalid epistemic array')
++    return value
++
++
++def record(value, required, optional=()):
++    if not isinstance(value, dict) or set(value)-set(required)-set(optional) or set(required)-set(value):
++        raise ValueError('invalid or unknown epistemic fields')
++    return value
++
++
++def identifier(value):
++    checked = text(value, 100)
++    if checked != value or any(c.isspace() for c in value):
++        raise ValueError('identifier must not contain whitespace')
++    return value
++
++
++def references(values, allowed, minimum=0):
++    values = rows(values)
++    if len(values) < minimum or any(not isinstance(v, str) or v not in allowed for v in values) or len(set(values)) != len(values):
++        raise ValueError('unknown or duplicated epistemic reference')
++    return list(values)
++
++
++def normalize(timeline, scenes, characters):
++    if not isinstance(timeline, dict) or timeline.get('schema') != SCHEMA:
++        raise ValueError('explicit epistemic timeline v1 required; regenerate legacy plans')
++    validate_data(timeline)
++    record(timeline, ('schema','facts','initial_beliefs','events'))
++    agents = [identifier(c.get('id')) if isinstance(c, dict) else identifier(None) for c in rows(characters, 50)]
++    scene_ids = [identifier(s.get('id')) if isinstance(s, dict) else identifier(None) for s in rows(scenes, 200)]
++    if not agents or not scene_ids or len(set(agents)) != len(agents) or len(set(scene_ids)) != len(scene_ids):
++        raise ValueError('duplicate or empty character/scene IDs')
++    agents = set(agents)
++    by_scene = {s['id']:s for s in scenes}
++    for scene in scenes:
++        references(scene.get('character_ids'), agents)
++        deps = references(scene.get('depends_on', []), set(scene_ids))
++        if scene['id'] in deps:
++            raise ValueError('scene cannot be its own prerequisite')
++    result = deepcopy(timeline)
++    facts = {}
++    for f in rows(result['facts'], 300):
++        record(f, ('id','description','values','initial_world'))
++        fid = identifier(f['id'])
++        text(f['description'],400)
++        values=rows(f['values'],60)
++        if fid in facts or not values or any(not isinstance(v,str) or not v.strip() or len(v)>280 for v in values) or len(set(values)) != len(values):
++            raise ValueError('fact values must be finite unique strings')
++        if f['initial_world'] is not None and f['initial_world'] not in values:
++            raise ValueError('unknown initial world value')
++        facts[fid] = values
++
++    def fact(row, with_value=True):
++        fid=row.get('fact')
++        if not isinstance(fid,str) or fid not in facts:
++            raise ValueError('unknown epistemic fact')
++        if with_value and row['value'] is not None and row['value'] not in facts[fid]:
++            raise ValueError('invalid epistemic value')
++
++    def actor(value):
++        if not isinstance(value,str) or value not in agents:
++            raise ValueError('unknown belief holder')
++
++    for b in rows(result['initial_beliefs'],2000):
++        record(b, ('agent','fact','value','basis'));actor(b['agent']);fact(b)
++        if not isinstance(b['basis'],str) or b['basis'] not in {'given','perception','communication','inference'}:
++            raise ValueError('invalid initial belief basis')
++    definitions = {
++        'requires': (('agent','fact','value','mode'), (), 200),
++        'updates': (('fact','value'), (), 300),
++        'observations': (('agent','fact','channel'), ('value',), 500),
++        'messages': (('speaker','recipients','accepted_by','fact','value','channel'), (), 300),
++        'inferences': (('agent','fact','value','premises'), (), 200),
++        'forget': (('agent','fact'), (), 200),
++    }
++    orders, event_ids, covered, bounds = set(), set(), set(), {}
++    for e in rows(result['events'],1200):
++        record(e, ('id','scene_id','order','participants','access'), (*definitions,'reader_reveals'))
++        eid=identifier(e['id']);sid=e['scene_id'];order=e['order']
++        if not isinstance(sid,str) or sid not in by_scene or eid in event_ids or type(order) is not int or order<0 or order in orders:
++            raise ValueError('duplicate/unknown event, chronological order or scene')
++        event_ids.add(eid);orders.add(order);covered.add(sid)
++        low, high = bounds.get(sid,(order,order));bounds[sid]=(min(low,order),max(high,order))
++        participants=set(references(e['participants'],set(by_scene[sid]['character_ids'])))
++        if not isinstance(e['access'],dict) or set(e['access'])-participants:
++            raise ValueError('access refers to a nonparticipant')
++        for channels in e['access'].values():references(channels, CHANNELS)
++        for name,(required,optional,limit) in definitions.items():
++            for row in rows(e.get(name,[]),limit):
++                record(row,required,optional)
++                fact(row, name not in {'observations','forget'} or 'value' in row)
++                if 'agent' in row:actor(row['agent'])
++                if name=='messages':
++                    actor(row['speaker'])
++                    recipients=references(row['recipients'],participants)
++                    references(row['accepted_by'],set(recipients))
++                if 'channel' in row and (not isinstance(row['channel'],str) or row['channel'] not in CHANNELS):
++                    raise ValueError('invalid perception channel')
++                if name=='requires' and (not isinstance(row['mode'],str) or row['mode'] not in {'believes','knows','unknown'}):
++                    raise ValueError('invalid mental requirement')
++                if name=='inferences':
++                    for premise in rows(row['premises'],100):
++                        record(premise,('fact','value'));fact(premise)
++        references(e.get('reader_reveals',[]),set(facts))
++    if covered != set(scene_ids):
++        raise ValueError('epistemic timeline must cover every scene')
++    for scene in scenes:
++        for dependency in scene.get('depends_on',[]):
++            if bounds[dependency][1] >= bounds[scene['id']][0]:
++                raise ValueError('causal prerequisite is not completed earlier in story chronology')
++    return result
+diff --git a/skills/pastiche-profile/scripts/story_workbench/server.py b/skills/pastiche-profile/scripts/story_workbench/server.py
+index ceb5540ba0c19add98e2575fb6f91f3ab4ddf3b6..dc75270e481fd5b1f3befba66cb731b5bae2979a 100644
+--- a/skills/pastiche-profile/scripts/story_workbench/server.py
++++ b/skills/pastiche-profile/scripts/story_workbench/server.py
+@@ -3,6 +3,7 @@ from __future__ import annotations
+ import hmac
+ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+ import json
++from json_boundary import loads as strict_loads, read_object
+ from pathlib import Path
+ import secrets
+ from urllib.parse import parse_qs, urlsplit
+@@ -80,7 +81,7 @@ def make_server(out: Path, port=8765, token: str | None = None):
+                     from .epistemic import simulate
+                     plan_path = out / "writing" / "story_blueprint.json"
+                     if plan_path.is_file():
+-                        plan = json.loads(plan_path.read_text(encoding="utf-8"))
++                        plan = read_object(plan_path)
+                         data = simulate(plan["epistemic"], plan["scenes"], plan["characters"])
+                     else:
+                         data = {"events": [], "note": "No authored perspective timeline yet."}
+@@ -113,7 +114,7 @@ def make_server(out: Path, port=8765, token: str | None = None):
+                 length = int(self.headers.get("Content-Length", "0"))
+                 if not 0 < length <= 65536 or self.headers.get_content_type() != "application/json":
+                     return self.send(400, {"error": "A bounded JSON request is required"})
+-                body = json.loads(self.rfile.read(length))
++                body = strict_loads(self.rfile.read(length), maximum=65536)
+                 if not isinstance(body, dict):
+                     raise ValueError("JSON body must be an object")
+                 store = Store(out / "character_graph.sqlite3")
+diff --git a/skills/pastiche-profile/scripts/story_workbench/store.py b/skills/pastiche-profile/scripts/story_workbench/store.py
+index 486463457a0eb30b3469744cf1635b0e88ac99cf..cf2b0f8c68f9576d1643e9773685febb7b5f529b 100644
+--- a/skills/pastiche-profile/scripts/story_workbench/store.py
++++ b/skills/pastiche-profile/scripts/story_workbench/store.py
+@@ -15,6 +15,7 @@ from pathlib import Path
+ import re
+ import sqlite3
+ from typing import Any
++from json_boundary import atomic_json
+ 
+ MAX_SOURCE_BYTES = 16_000_000
+ CHARACTER_KINDS = {"appearance", "voice", "value", "goal", "belief", "knowledge", "relationship", "attribute"}
+@@ -245,8 +246,17 @@ class Store:
+         return eid
+ 
+     def _validate_claim(self, body: dict) -> dict:
++        if not isinstance(body, dict):
++            raise ValueError("claim must be an object")
++        for key in ("subject", "object", "holder", "proposition_subject", "speaker"):
++            value = body.get(key)
++            if value is not None and (not isinstance(value, str) or not value.strip()):
++                raise ValueError("claim entity IDs must be nonempty strings or null")
++        for key in ("domain", "epistemic", "modality", "polarity", "stance", "basis"):
++            if key in body and not isinstance(body[key], str):
++                raise ValueError("claim classifications must be strings")
+         result = {"subject": text(body.get("subject"), 100), "predicate": text(body.get("predicate"), 80),
+-                  "object": body.get("object") or None, "value": text(body.get("value"), 400),
++                  "object": body.get("object"), "value": text(body.get("value"), 400),
+                   "kind": text(body.get("kind", "attribute"), 40),
+                   "epistemic": body.get("epistemic", "inferred"), "scope": text(body.get("scope"), 160),
+                   "observed_at": position(body.get("observed_at")),
+@@ -280,7 +290,7 @@ class Store:
+                 raise ValueError("perspective holder must be a character/world/reader")
+             if not prop or prop != result["object"] or result["subject"] != (prop if holder in RESERVED else holder):
+                 raise ValueError("perspective endpoints and holder do not agree")
+-            if speaker is not None and entity_type(self.get("entities", speaker)) != "character":
++            if speaker is not None and (speaker in RESERVED or entity_type(self.get("entities", speaker)) != "character"):
+                 raise ValueError("speaker must be a character")
+             if body.get("stance") not in {"affirmed", "denied", "uncertain"} or body.get("basis") not in BASES:
+                 raise ValueError("invalid perspective stance or acquisition basis")
+@@ -424,11 +434,11 @@ class Store:
+                         raise ValueError("invalid coordinate")
+                 self.db.execute("INSERT OR REPLACE INTO layout VALUES (?,?,?)", (eid, p["x"], p["y"]))
+ 
+-    def _context(self, scope: str, cutoff: float, domain: str) -> dict:
++    def _context(self, scope: str, cutoff: float, domain: str, *, graph: dict | None = None) -> dict:
+         cutoff = position(cutoff)
+         if cutoff is None:
+             raise ValueError("cutoff is required")
+-        graph = self.graph()
++        graph = self.graph() if graph is None else graph
+         selected = []
+         for c in graph["claims"]:
+             if (c["scope"] != scope or c["domain"] != domain
+@@ -482,34 +492,10 @@ class Store:
+         return graph
+ 
+     def validate_context_snapshot(self, context: dict) -> None:
+-        """Validate the whole exported record, not just its visible description."""
+-        if context.get("schema") != "pastiche.writer.context.v4":
+-            raise Conflict("writer context schema changed; export current v4 context")
+-        for key, domain in (("characters", "character"), ("world", "world"), ("perspectives", "epistemic")):
+-            section = context.get(key, {})
+-            if not section.get("claims"):
+-                continue
+-            current = self._context(context["scope"], context.get("cutoff", 1), domain)
+-            if section.get("scope") != current["scope"] or section.get("cutoff") != current["cutoff"]:
+-                raise Conflict("context scope/cutoff differs; export it again")
+-            available = {c["id"]: c for c in current["claims"]}
+-            for c in section["claims"]:
+-                if available.get(c.get("id")) != c:
+-                    raise Conflict("writer context is changed, stale or revoked; export it again")
+-            entities = {e["id"]: e for e in current["entities"]}
+-            if any(entities.get(e.get("id")) != e for e in section.get("entities", [])):
+-                raise Conflict("context entity identity changed; export it again")
+-
+-
+-def atomic_json(path: Path, body: Any) -> None:
+-    import os
+-    import tempfile
+-    path.parent.mkdir(parents=True, exist_ok=True)
+-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+-    try:
+-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+-            f.write(dump(body) + "\n")
+-        os.replace(tmp, path)
+-    finally:
+-        if Path(tmp).exists():
+-            Path(tmp).unlink()
++        """Recheck all selected claims, entities AND plot evidence at point of use."""
++        from .context_validation import validate_snapshot
++        if self.db.in_transaction:
++            validate_snapshot(self, context)
++        else:
++            with self.transaction():
++                validate_snapshot(self, context)
