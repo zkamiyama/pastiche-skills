@@ -1,4 +1,5 @@
 """Synthetic tests for the LLM-first pipeline. No real corpus or network calls."""
+import inspect
 import json
 from pathlib import Path
 import re
@@ -124,6 +125,26 @@ class LlmStyleTests(unittest.TestCase):
         }
         options.update(overrides)
         return llm_style.analyze(self.corpus, self.out, model, **options)
+
+    def test_default_samples_all_works_even_above_30(self):
+        # A default of 0 means the work selection is unlimited, not a
+        # request to analyze every source chunk in full.
+        source = (self.corpus / "fiction_00.txt").read_text(encoding="utf-8")
+        for i in range(6, 36):
+            (self.corpus / f"fiction_{i:02d}.txt").write_text(
+                source, encoding="utf-8")
+        self.assertEqual(
+            inspect.signature(llm_style.analyze)
+                   .parameters["analysis_works"].default, 0)
+        works, jobs, full_chunks = llm_style.sampled_jobs(
+            self.corpus, 0, 2, 1800)
+        self.assertEqual(len(works), 36)
+        self.assertEqual(len({work_id for work_id, _, _ in jobs}), 36)
+        self.assertEqual(len(jobs), 72)
+        self.assertGreater(full_chunks, len(jobs))
+        _, limited, _ = llm_style.sampled_jobs(
+            self.corpus, 30, 2, 1800)
+        self.assertEqual(len({w for w, _, _ in limited}), 30)
 
     def test_end_to_end_provenance_and_private_outputs(self):
         model = FixtureModel(delay=0.005)
