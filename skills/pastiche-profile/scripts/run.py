@@ -126,6 +126,11 @@ def main(argv=None):
     parser.add_argument("--lexical-batch-size",type=int,default=24)
     parser.add_argument("--no-lexical-review",action="store_true",
                         help="skip model language-impression review; exact statistics still run")
+    parser.add_argument("--skip-story", action="store_true", help="LLM mode: skip full-text story/character analysis (style sampling only)")
+    parser.add_argument("--canon-scope", default="corpus:original", help="explicit universe/edition namespace for character facts")
+    parser.add_argument("--story-fanout", type=int, default=24)
+    parser.add_argument("--story-panel-size", type=int, default=12)
+    parser.add_argument("--story-rounds", type=int, default=3)
     parser.add_argument("--api-key-env")
     parser.add_argument("--no-stream", action="store_true")
     parser.add_argument("--restart", action="store_true")
@@ -134,6 +139,10 @@ def main(argv=None):
     try:
         if args.llm_workers < 1:
             raise ValueError("--llm-workers must be >= 1")
+        if args.mode == "llm" and not args.skip_story and (
+                args.story_fanout < 2 or args.story_panel_size < 2 or args.story_rounds < 1
+                or not args.canon_scope.strip() or len(args.canon_scope) > 160):
+            raise ValueError("invalid story limits or canon scope")
         if args.lexical_review_limit<0 or not 1<=args.lexical_batch_size<=48:
             raise ValueError("--lexical-review-limit >=0 and --lexical-batch-size 1..48 required")
         if args.mode!="none" or args.check:
@@ -240,6 +249,26 @@ def main(argv=None):
                 return r.returncode
         else:
             print("[4/5] LLM style synthesis skipped (local-only mode)",flush=True)
+        if args.mode == "llm" and not args.skip_story:
+            print("[story] Full selected texts: events, hierarchy, character claims, plot patterns", flush=True)
+            story = [sys.executable, "-u", str(HERE/"workbench.py"), "analyze", str(args.corpus),
+                     "--out", str(args.out), "--api-base", endpoint, "--backend", backend,
+                     "--model", name, "--canon-scope", args.canon_scope,
+                     "--chunk-chars", str(args.chunk_chars), "--analysis-works", str(args.analysis_works),
+                     "--llm-workers", str(args.llm_workers), "--timeout", str(args.timeout),
+                     "--retries", str(args.retries), "--progress-interval", str(args.progress_interval),
+                     "--max-output-tokens", str(args.max_output_tokens), "--story-fanout", str(args.story_fanout),
+                     "--story-panel-size", str(args.story_panel_size), "--story-rounds", str(args.story_rounds)]
+            if args.api_key_env:
+                story += ["--api-key-env", args.api_key_env]
+            if args.no_stream:
+                story += ["--no-stream"]
+            if args.restart:
+                story += ["--restart"]
+            code = subprocess.run(story).returncode
+            if code:
+                print("Full story analysis incomplete; inspect story_audit.json and rerun without --restart.", file=sys.stderr)
+                return code
         print("[5/5] Build combined style guide",flush=True)
         guide=[sys.executable,str(HERE/"pastiche.py"),"guide", "--profile",str(args.out/"style_profile.json"),
                "--notes",str(args.out/"narrative_rules.json"),
@@ -250,6 +279,8 @@ def main(argv=None):
             if not qualitative.is_file():
                 raise ValueError("LLM synthesis did not produce qualitative_bible.md")
             guide += ["--qualitative",str(qualitative)]
+            if not args.skip_story:
+                guide += ["--narrative-structure", str(args.out/"narrative_bible.md")]
         if model_review_ok and (args.out/"lexical_interpretation.md").exists():
             guide += ["--lexical-review",str(args.out/"lexical_interpretation.md")]
         code=subprocess.run(guide).returncode

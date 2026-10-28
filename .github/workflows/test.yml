@@ -2,17 +2,49 @@ name: tests
 on:
   push:
   pull_request:
+permissions:
+  contents: read
 jobs:
   offline-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: '3.10'
+          - os: ubuntu-latest
+            python: '3.12'
+          - os: windows-latest
+            python: '3.12'
+          - os: macos-latest
+            python: '3.12'
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Synthetic offline regression tests (no corpus or production model)
+        run: python -m unittest discover -s tests -v
+      - name: Compile scripts
+        run: python -m compileall -q skills
+      - name: Validate optional Japanese dictionary
+        if: runner.os == 'Linux' && matrix.python == '3.12'
+        run: |
+          python -m pip install 'fugashi-plus[unidic-lite]==1.5.2.post1'
+          python -c 'from importlib import metadata; from fugashi import Tagger; assert metadata.version("fugashi-plus"); assert [w.surface for w in Tagger()("来たっ！ 来たッ！")]'
+  browser-smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      - name: Test with synthetic corpus (no real books)
-        run: python -m unittest discover -s tests -v
-      - name: Validate fugashi-plus and UniDic-lite wheels
+          python-version: '3.12'
+      - name: Test-only browser dependencies
         run: |
-          python -m pip install 'fugashi-plus[unidic-lite]==1.5.2.post1'
-          python -c 'from importlib import metadata; from fugashi import Tagger; assert metadata.version("fugashi-plus"); assert [w.surface for w in Tagger()("来たっ！ 来たッ！")]'
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Review UI over real loopback HTTP
+        run: python tests/browser_smoke.py
