@@ -310,6 +310,32 @@ def _check_sources(chosen: list[dict[str, Any]],
     return supports, calls, cached
 
 
+def _synthesize(patterns: list[dict[str, Any]], model: Any,
+                store: narrative.CheckpointStore,
+                reporter: narrative.ProgressReporter,
+                workers: int, retries: int) -> tuple[list[dict[str, Any]], int, int]:
+    supported = [p for p in patterns if p["status"] == "model_supported"][:24]
+    if not supported:
+        return [], 0, 0
+
+    key = "synthesis:" + core.digest("synthesize", supported, model)
+
+    def validate(raw: Any) -> list[dict[str, Any]]:
+        if isinstance(raw, list):
+            raw = {"sections": raw}
+        return core.parse_synthesis(raw, supported)
+
+    def call(payload: Any, worker_model: Any, logical_id: Any) -> Any:
+        return reporter.call(worker_model, core.synthesize_prompt(payload),
+                             "STYLE SYNTHESIZE", retries=retries,
+                             record_status=workers == 1)
+
+    data, calls, cached = _run_tasks(
+        [("overall", key, supported, validate)],
+        model, workers, call, reporter, "STYLE_SYNTHESIZE", store)
+    return data["overall"], calls, cached
+
+
 def make_patterns(nodes: list[dict[str, Any]],
                   by_id: dict[str, dict[str, Any]],
                   verified: dict[str, list[str]],
@@ -364,6 +390,7 @@ def make_patterns(nodes: list[dict[str, Any]],
 
 def qualitative_guide(patterns: list[dict[str, Any]], *,
                       total_works: int, sampled_works: int, chunks: int,
+                      synthesis: list[dict[str, Any]] | None = None,
                       max_per_dimension: int = 6) -> str:
     lines = [
         "# Qualitative Style Bible — LLM-assisted (private)", "",
@@ -373,6 +400,14 @@ def qualitative_guide(patterns: list[dict[str, Any]], *,
         "> permission to copy source wording. Model review is not human validation.",
         "> Use as optional techniques for unrelated characters and new plots.", "",
     ]
+    if synthesis:
+        lines += ["## LLMによる横断的な作風のまとめ", ""]
+        for section in synthesis:
+            lines.append(f"- {JAPANESE_LABELS[section['dimension']]}: "
+                         f"{section['summary']}")
+            lines.append(f"  - 執筆時の応用: {section['writing_use']}"
+                         f"（根拠: {', '.join(section['pattern_ids'])}）")
+        lines.append("")
     any_supported = False
     for dimension in core.DIMENSIONS:
         rows = [r for r in patterns if r["dimension"] == dimension
@@ -443,6 +478,8 @@ def analyze(corpus: Path, out: Path, model: Any, *,
             nodes, by_id, verified, len({j[0] for j in jobs}),
             len(works), minimum_works)
         accepted = [p for p in patterns if p["status"] == "model_supported"]
+        synthesis, counts["synthesis"], cache["synthesis"] = _synthesize(
+            patterns, model, store, reporter, llm_workers, retries)
         narrative_rules = []
         for row in (p for p in patterns if p["dimension"] == "narrative"):
             rule = {k: row[k] for k in (
@@ -469,6 +506,7 @@ def analyze(corpus: Path, out: Path, model: Any, *,
                                    >= minimum_works]),
             "supported_by_dimension": dict(Counter(
                 row["dimension"] for row in accepted)),
+            "summarized_dimensions": [s["dimension"] for s in synthesis],
             "actual_llm_calls_this_run": counts,
             "restored_checkpoint_entries": cache,
             "note": "Counts refer to sampled works; review is model-based, not human ground truth.",
@@ -484,6 +522,10 @@ def analyze(corpus: Path, out: Path, model: Any, *,
             "limits": ["LLM-generated descriptions may be inaccurate",
                        "similar meaning does not establish identical technique",
                        "model source checks are not independent verification"]})
+        narrative.atomic_json_write(out / "qualitative_summary.json", {
+            "schema": core.SCHEMA,
+            "sections": synthesis,
+            "note": "LLM-written guidance supported only by model-screened pattern IDs."})
         narrative.atomic_json_write(out / "narrative_rules.json", {
             "schema": "pastiche.narrative.v2", "generator_version": core.VERSION,
             "mode": "llm-first-semantic", "works": audit["sampled_works"],
@@ -495,7 +537,7 @@ def analyze(corpus: Path, out: Path, model: Any, *,
         (out / "qualitative_bible.md").write_text(
             qualitative_guide(patterns, total_works=len(works),
                               sampled_works=audit["sampled_works"],
-                              chunks=len(jobs)), encoding="utf-8")
+                              chunks=len(jobs), synthesis=synthesis), encoding="utf-8")
         reporter.status(state="completed", stage="finished",
                         completed_chunks=len(jobs),
                         actual_model_calls=sum(counts.values()))
