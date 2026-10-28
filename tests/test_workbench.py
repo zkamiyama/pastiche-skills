@@ -168,7 +168,7 @@ class StoryTests(Fixture):
         patterns = json.loads((self.out/'plot_patterns.json').read_text(encoding='utf-8'))['patterns']
         self.assertTrue(any(p['status']=='model_supported' for p in patterns))
         graph = json.loads((self.out/'character_graph.json').read_text(encoding='utf-8'))
-        self.assertTrue(all(c['status']=='pending' for c in graph['claims']))
+        self.assertTrue(all(c['status']=='auto_accepted' for c in graph['claims']))
         self.assertNotIn(self.body[:60], json.dumps(graph, ensure_ascii=False))
         self.assertEqual(len(graph['entities']), 6) # exact names not auto-merged across works
 
@@ -221,17 +221,26 @@ class StoreTests(Fixture):
             self.assertEqual(len(s.writer_context(src['scope'])['claims']),1)
             with self.assertRaises(Conflict):s.review(c,'reject',1,'human','old revision')
             s.review(c,'correct',2,'human','weaker interpretation',{'value':'一時的に判断を借りる'})
-            self.assertEqual(s.claim(c)['status'],'needs_review')
+            self.assertEqual(s.claim(c)['status'],'human_approved')
+            self.assertEqual(s.writer_context(src['scope'])['claims'][0]['value'],'一時的に判断を借りる')
+            s.review(c,'revoke',3,'human','do not use this interpretation')
+            self.assertEqual(s.claim(c)['status'],'revoked')
             self.assertEqual(s.writer_context(src['scope'])['claims'],[])
+            # A model re-extracting the same original claim must not reset a human rejection.
             original=s.claim(c)['original']
             self.assertEqual(s.add_claim(original),c)
-            self.assertEqual(s.claim(c)['revision'],3)
-            self.assertEqual(len(s.history(c)),2)
+            self.assertEqual(s.claim(c)['status'],'revoked')
+            s.review(c,'approve',4,'human','restored after review')
+            self.assertEqual(s.claim(c)['status'],'human_approved')
+            self.assertEqual(s.claim(c)['revision'],5)
+            self.assertEqual(len(s.history(c)),4)
         finally:s.close()
 
     def test_source_change_invalidates_approval_and_selectors(self):
         s,src,q,a,b,c=self.store_fixture()
         try:
+            self.assertEqual(s.claim(c)['status'],'auto_accepted')
+            self.assertEqual(len(s.writer_context(src['scope'])['claims']),1)
             s.review(c,'approve',1,'human','checked')
             Path(src['path']).write_text(self.body+'変更。',encoding='utf-8')
             self.assertTrue(s.graph()['claims'][0]['stale'])
@@ -280,6 +289,49 @@ class StoreTests(Fixture):
             with self.assertRaises(ValueError):s.save_layout({a:{'x':float('nan'),'y':0}})
             with self.assertRaises(ValueError):s.review(c,'correct',1,'human','test',{'valid_from':.8,'valid_to':.2})
         finally:s.close()
+
+
+    def test_auto_accept_legacy_migration_and_human_decision_persistence(self):
+        s,src,q,a,b,c = self.store_fixture()
+        try:
+            self.assertEqual(s.claim(c)['status'], 'auto_accepted')
+            selected = s.writer_context(src['scope'])['claims']
+            self.assertEqual(len(selected), 1)
+            self.assertEqual(selected[0]['status'], 'auto_accepted')
+            self.assertIn('NOT independently verified', s.writer_context(src['scope'])['note'])
+
+            # Simulate an old DB created with the default 'pending' policy.
+            s.db.execute("UPDATE claims SET status='pending' WHERE id=?", (c,))
+            s.db.commit()
+        finally:
+            s.close()
+
+        s = Store(self.out/'character_graph.sqlite3')
+        try:
+            self.assertEqual(s.claim(c)['status'], 'auto_accepted')
+            s.review(c, 'defer', 1, 'human', 'check later')
+            self.assertEqual(s.writer_context(src['scope'])['claims'], [])
+        finally:
+            s.close()
+
+        s = Store(self.out/'character_graph.sqlite3')
+        try:
+            self.assertEqual(s.claim(c)['status'], 'needs_review')
+            s.review(c, 'reject', 2, 'human', 'incorrect')
+            self.assertEqual(s.claim(c)['status'], 'rejected')
+            self.assertEqual(s.writer_context(src['scope'])['claims'], [])
+        finally:
+            s.close()
+
+    def test_untouched_auto_accept_is_invalidated_by_source_edit(self):
+        s,src,q,a,b,c = self.store_fixture()
+        try:
+            self.assertEqual(len(s.writer_context(src['scope'])['claims']), 1)
+            Path(src['path']).write_text(self.body+'追記。', encoding='utf-8')
+            self.assertEqual(s.claim(c)['status'], 'auto_accepted')
+            self.assertEqual(s.writer_context(src['scope'])['claims'], [])
+        finally:
+            s.close()
 
 
 class HTTPTests(Fixture):
@@ -351,7 +403,7 @@ class ResearchTests(Fixture):
                        scope='novel:web',max_pages=1,interval=0,retries=0,fetcher=FakeFetcher())
         self.assertGreater(audit['claims'],0)
         s=Store(self.out/'character_graph.sqlite3')
-        try:self.assertTrue(all(c['status']=='pending' and c['observed_at'] is None for c in s.graph()['claims']))
+        try:self.assertTrue(all(c['status']=='auto_accepted' and c['observed_at'] is None for c in s.graph()['claims']))
         finally:s.close()
 
 

@@ -115,7 +115,7 @@ class Store:
         CREATE TABLE IF NOT EXISTS evidence(id TEXT PRIMARY KEY, source TEXT NOT NULL REFERENCES sources(id), body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS entities(id TEXT PRIMARY KEY, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS claims(id TEXT PRIMARY KEY, body TEXT NOT NULL, override TEXT,
-          status TEXT NOT NULL DEFAULT 'pending', revision INTEGER NOT NULL DEFAULT 1, updated TEXT NOT NULL);
+          status TEXT NOT NULL DEFAULT 'auto_accepted', revision INTEGER NOT NULL DEFAULT 1, updated TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS reviews(seq INTEGER PRIMARY KEY AUTOINCREMENT, claim_id TEXT NOT NULL,
           action TEXT NOT NULL, reviewer TEXT NOT NULL, note TEXT NOT NULL, before_json TEXT NOT NULL,
           after_json TEXT NOT NULL, created TEXT NOT NULL);
@@ -124,6 +124,14 @@ class Store:
         CREATE TABLE IF NOT EXISTS tasks(key TEXT PRIMARY KEY, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS artifacts(id TEXT PRIMARY KEY, kind TEXT NOT NULL, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS layout(id TEXT PRIMARY KEY, x REAL NOT NULL, y REAL NOT NULL);
+        """)
+        # Existing databases may contain untouched claims created before
+        # opt-out review became the default. Convert ONLY untouched legacy
+        # rows: explicit human decisions (including defer/correct) stay intact.
+        self.db.execute("""
+            UPDATE claims SET status='auto_accepted'
+            WHERE status='pending'
+              AND NOT EXISTS (SELECT 1 FROM reviews WHERE reviews.claim_id=claims.id)
         """)
         self.db.commit()
 
@@ -243,7 +251,7 @@ class Store:
     def add_claim(self, body: dict) -> str:
         value = self._validate_claim(body)
         cid = uid("K", value)
-        self.db.execute("INSERT OR IGNORE INTO claims(id,body,updated) VALUES (?,?,?)", (cid, dump(value), now()))
+        self.db.execute("INSERT OR IGNORE INTO claims(id,body,status,updated) VALUES (?,?,?,?)", (cid, dump(value), "auto_accepted", now()))
         self.db.commit()
         return cid
 
@@ -258,7 +266,7 @@ class Store:
 
     def review(self, cid: str, action: str, revision: int, reviewer: str, note: str,
                patch: dict | None = None) -> dict:
-        if action not in {"approve", "reject", "defer", "correct"} or type(revision) is not int:
+        if action not in {"approve", "reject", "defer", "correct", "revoke"} or type(revision) is not int:
             raise ValueError("invalid review action or revision")
         reviewer, note = text(reviewer, 80), text(note, 2000, empty=True)
         with self.transaction():
@@ -275,7 +283,7 @@ class Store:
             if action in {"approve", "correct"}:
                 for eid in effective["evidence_ids"]:
                     self.resolve_evidence(eid, 0)
-            status = {"approve": "human_approved", "reject": "rejected", "defer": "needs_review", "correct": "needs_review"}[action]
+            status = {"approve": "human_approved", "reject": "rejected", "revoke": "revoked", "defer": "needs_review", "correct": "human_approved"}[action]
             self.db.execute("UPDATE claims SET override=?,status=?,revision=revision+1,updated=? WHERE id=?",
                             (dump(effective), status, now(), cid))
             updated = self.claim(cid)
@@ -356,18 +364,18 @@ class Store:
         graph = self.graph()
         selected = []
         for c in graph["claims"]:
-            if c["scope"] != scope or c["status"] != "human_approved" or c["stale"]:
+            if c["scope"] != scope or c["status"] not in {"auto_accepted", "human_approved"} or c["stale"]:
                 continue
             # Unknown observation time is excluded for spoiler-restricted views.
             if cutoff < 1 and (c["observed_at"] is None or c["observed_at"] > cutoff):
                 continue
             if c["valid_from"] is not None and not c["valid_from"] <= cutoff <= c["valid_to"]:
                 continue
-            selected.append({k: c[k] for k in ("id", "display_subject", "display_object", "predicate", "value", "kind", "epistemic", "observed_at", "valid_from", "valid_to", "evidence_ids")})
+            selected.append({k: c[k] for k in ("id", "display_subject", "display_object", "predicate", "value", "kind", "epistemic", "status", "model_checked", "observed_at", "valid_from", "valid_to", "evidence_ids")})
         used = {c["display_subject"] for c in selected} | {c["display_object"] for c in selected if c["display_object"]}
-        return {"schema": "pastiche.writer.characters.v1", "scope": scope, "cutoff": cutoff,
+        return {"schema": "pastiche.writer.characters.v2", "scope": scope, "cutoff": cutoff,
                 "entities": [e for e in graph["entities"] if e["id"] in used], "claims": selected,
-                "note": "Human-reviewed claims only. Unknown duration is not persistence; observed facts may cease to hold."}
+                "note": "Auto-accepted source-grounded claims and human-approved edits. Auto-accepted is NOT independently verified or established canon; stale/revoked/rejected/deferred claims are excluded. Unknown duration is not persistence."}
 
 
 def atomic_json(path: Path, body: Any) -> None:
