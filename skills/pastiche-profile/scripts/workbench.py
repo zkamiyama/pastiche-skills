@@ -132,6 +132,22 @@ def main(argv=None):
     for flag in ('out', 'draft', 'plan', 'context'):
         d.add_argument('--'+flag, type=Path, required=True)
     add_model_flags(d)
+    rf = commands.add_parser('refine', help='diagnose style, propose bounded edits, re-audit and compare; never overwrite original')
+    for flag in ('out', 'draft', 'plan', 'context'):
+        rf.add_argument('--'+flag, type=Path, required=True)
+    rf.add_argument('--patterns', type=Path, help='default: OUT/qualitative_patterns.json')
+    rf.add_argument('--style-profile', type=Path, help='optional descriptive style_profile.json')
+    rf.add_argument('--lexical-profile', type=Path, help='optional lexical_profile.json')
+    rf.add_argument('--scene-id', required=True)
+    viewpoint = rf.add_mutually_exclusive_group(required=True)
+    viewpoint.add_argument('--character-id', help='private viewpoint for dialogue/interiority')
+    viewpoint.add_argument('--director', action='store_true', help='explicit omniscient narration')
+    rf.add_argument('--event-id', help='required for a multi-event character scene; pass only that event excerpt')
+    rf.add_argument('--pattern-id', action='append', help='select a bounded subset of supported patterns')
+    rf.add_argument('--max-rounds', type=int, choices=(1, 2), default=1)
+    rf.add_argument('--judge-model', help='optional separate HTTP reviewer model on the same endpoint')
+    rf.add_argument('--judge-agent-profile', help='optional subagent reviewer dispatch/cache label')
+    add_model_flags(rf)
     d = commands.add_parser('demo', help='make a new private synthetic editor fixture, without network access')
     d.add_argument('--out', type=Path, required=True)
     ep = commands.add_parser('perspectives', help='simulate a declared plan without an LLM')
@@ -187,6 +203,27 @@ def main(argv=None):
             from story_workbench.writing import prepare
             result = prepare(args.out, args.canon_scope, args.cutoff, mode=args.character_mode, character_ids=args.character_id,
                              world_mode=args.world_mode, world_entity_ids=args.world_entity_id)
+        elif args.command == 'refine':
+            from copy import copy
+            from story_workbench.style_refine import refine
+            if args.judge_model and args.executor != 'http':
+                raise ValueError('--judge-model requires the HTTP executor')
+            if args.judge_agent_profile and args.executor != 'subagent':
+                raise ValueError('--judge-agent-profile requires the subagent executor')
+            judge = None
+            model = model_from(args)
+            if args.judge_model or args.judge_agent_profile:
+                judge_args = copy(args)
+                if args.judge_model: judge_args.model = args.judge_model
+                if args.judge_agent_profile: judge_args.agent_profile = args.judge_agent_profile
+                judge = model_from(judge_args)
+            result = refine(args.out, args.draft, args.plan, args.context,
+                            args.patterns or args.out / 'qualitative_patterns.json', model,
+                            scene_id=args.scene_id, character_id=args.character_id, director=args.director,
+                            event_id=args.event_id, pattern_ids=args.pattern_id, max_rounds=args.max_rounds,
+                            style_profile=args.style_profile, lexical_profile=args.lexical_profile,
+                            judge_model=judge, workers=args.llm_workers,
+                            retries=args.retries, interval=args.progress_interval)
         elif args.command in {'plan', 'audit-plan', 'audit-draft'}:
             from story_workbench import writing
             context = read_object(args.context)

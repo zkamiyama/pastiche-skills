@@ -35,3 +35,10 @@ python3 skills/pastiche-profile/scripts/run.py /private/corpus \
 観察・統合・検証など各タスクの根拠IDと出力スキーマを守る。推測を人間の承認へ昇格させない。機微なモデル識別子はタスクのプロフィール名・コミット・公開結果へ含めない。`--agent-profile` は一般的な非機微バージョンラベルにする。
 
 技術仕様と移行: `docs/PERSPECTIVES_AND_EXECUTORS.md`。
+
+
+## WriteのRefineタスク
+
+`STYLE_REVIEW` は各文体パターンの適用可否と根拠付き指摘、`STYLE_REFINE` は元稿ハッシュ付き局所差分、`STYLE_COMPARE` は匿名A/Bの比較を返す。比較役に元稿／改稿のラベルや編集理由、編集役の履歴を追加で渡さない。`DRAFT_AUDIT` は全知の認識状態を使うため、そのプロンプト／回答を人物視点の編集役へ転送しない。ホスト側も各タスクのprompt以外の親コンテキストを不用意に引き継がせない。
+
+`--judge-agent-profile` が指定されていると、診断・監査・比較と編集でdispatchラベルが異なる。ラベルが違うだけで別モデルや統計的独立性が保証されたと説明しない。原稿・差分は非公開で保持し、本文をリポジトリや公開ログへ保存しない。
