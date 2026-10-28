@@ -23,6 +23,11 @@ def ingest(store: Store, source: dict, units: list[dict], raw: dict, chunk_index
     for actor in raw["characters"]:
         ns = namespace if actor["identity"] == "explicit" else f"{namespace}:passage:{chunk_index}"
         actors[actor["id"]] = store.entity(ns, actor["name"], source["scope"], actor["aliases"])
+    world_ids = {}
+    for entity in raw["world_entities"]:
+        ns = namespace if entity["identity"] == "explicit" else f"{namespace}:passage:{chunk_index}"
+        world_ids[entity["id"]] = store.entity(ns, entity["name"], source["scope"], entity["aliases"],
+                                             entity_type=entity["entity_type"])
     def evidence(refs):
         return store.evidence_for(source, units, refs, length)
     def observed(refs):
@@ -35,12 +40,20 @@ def ingest(store: Store, source: dict, units: list[dict], raw: dict, chunk_index
         events.append({"id": event_ids[event["id"]], "type": "event", "source_id": source["id"],
                        **{k: event[k] for k in ("summary", "function", "before", "after", "story_time")},
                        "actors": [actors[c] for c in event["actors"]],
+                       "world_entities": [world_ids[c] for c in event.get("world_entities", [])],
                        "position": start / max(1, length), "evidence_ids": [q], "children": []})
     for claim in raw["claims"]:
         q = evidence(claim["evidence_ids"])
         claims.append(store.add_claim({**{k: claim[k] for k in ("kind", "predicate", "value", "epistemic")},
                        "subject": actors[claim["subject"]], "object": actors.get(claim["object"]),
                        "scope": source["scope"], "evidence_ids": [q], "observed_at": observed(claim["evidence_ids"])}))
+    all_entities = {**actors, **world_ids}
+    for claim in raw["world_claims"]:
+        q = evidence(claim["evidence_ids"])
+        claims.append(store.add_claim({**{k: claim[k] for k in ("kind", "predicate", "value", "epistemic",
+                        "domain", "conditions", "exceptions", "modality", "polarity", "story_time")},
+                        "subject": all_entities[claim["subject"]], "object": all_entities.get(claim["object"]),
+                        "scope": source["scope"], "evidence_ids": [q], "observed_at": observed(claim["evidence_ids"])}))
     for link in raw["links"]:
         links.append({"source": event_ids[link["source"]], "target": event_ids[link["target"]],
                       "kind": link["kind"], "evidence_ids": [evidence(link["evidence_ids"])],
@@ -314,6 +327,7 @@ def analyze(corpus: Path, out: Path, model: Any, *, scope="corpus:original", chu
     engine = Engine(store, model, out, workers=workers, retries=retries, interval=interval)
     manifest = {"schema": "pastiche.story.audit.v1", "version": VERSION, "state": "running", "started": now()}
     atomic_json(out / "story_audit.json", manifest)
+    atomic_json(out / "world_audit.json", {"state": "running", "version": VERSION})
     try:
         paths = narrative.input_files(corpus)
         registered, skipped = [], 0
@@ -371,11 +385,16 @@ def analyze(corpus: Path, out: Path, model: Any, *, scope="corpus:original", chu
         (out / "story_maps.jsonl").write_text("".join(dump(w)+"\n" for w in works), encoding="utf-8")
         atomic_json(out / "plot_patterns.json", bundle)
         atomic_json(out / "character_graph.json", store.graph())
+        from .world import export_world
+        world_stats = export_world(store, out, scope)
+        atomic_json(out / "world_audit.json", {"state": "completed", "version": VERSION,
+                    "scanned_chunks": len(tasks), "source_versions": bundle["source_versions"], **world_stats})
         (out / "narrative_bible.md").write_text(narrative_bible(patterns), encoding="utf-8")
         manifest.update(state="completed", eligible_works=len(registered), analyzed_works=len(works), skipped_files=skipped,
                         full_chunks=sum(w["total_chunks"] for w in works), scanned_chunks=len(tasks),
                         all_selected_text_scanned=True, claim_count=sum(len(w["claim_ids"]) for w in works),
-                        pattern_count=len(patterns), supported_patterns=sum(p["status"]=="model_supported" for p in patterns),
+                        world_entities=world_stats["entities"], world_claims=world_stats["claims"],
+                        world_conflict_candidates=world_stats["conflict_candidates"], pattern_count=len(patterns), supported_patterns=sum(p["status"]=="model_supported" for p in patterns),
                         source_versions=bundle["source_versions"], **engine.stats,
                         limitations=["text coverage is not comprehension accuracy", "characters are not automatically merged across works",
                                      "hierarchical summaries may miss long-range dependencies", "plot witness checks are partial and same-model"])
@@ -386,6 +405,7 @@ def analyze(corpus: Path, out: Path, model: Any, *, scope="corpus:original", chu
         manifest.update(state="interrupted" if isinstance(exc, KeyboardInterrupt) else "failed", error_type=type(exc).__name__, **engine.stats)
         atomic_json(out / "story_audit.json", manifest)
         atomic_json(out / "story_progress.json", manifest)
+        atomic_json(out / "world_audit.json", {"state": manifest["state"], "error_type": type(exc).__name__})
         raise
     finally:
         store.close()

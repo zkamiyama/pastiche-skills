@@ -17,6 +17,22 @@ import sqlite3
 from typing import Any
 
 MAX_SOURCE_BYTES = 16_000_000
+CHARACTER_KINDS = {"appearance", "voice", "value", "goal", "belief", "knowledge", "relationship", "attribute"}
+WORLD_TYPES = {"place", "organization", "polity", "species", "artifact", "concept", "system", "culture", "era"}
+WORLD_KINDS = {"geography", "affiliation", "history", "institution", "law", "culture", "technology", "magic", "ecology", "resource", "cosmology", "world_relation"}
+WORLD_MODALITIES = {"descriptive", "normative", "capability", "belief", "unknown"}
+USABLE_STATUSES = {"auto_accepted", "human_approved"}
+
+
+def entity_type(entity: dict) -> str:
+    """Old JSON entity records are characters; do not change their identifiers."""
+    return entity.get("entity_type", "character")
+
+
+def short_list(value: Any, maximum: int = 8) -> list[str]:
+    if not isinstance(value, list) or len(value) > maximum:
+        raise ValueError("invalid world conditions or exceptions")
+    return list(dict.fromkeys(text(v, 240) for v in value))
 
 
 def now() -> str:
@@ -210,12 +226,20 @@ class Store:
                  ("id", "label", "uri", "scope", "sha256", "source_type", "accessed_at")},
                 "text": body[lo:hi], "offset": lo, "coordinate_unit": "unicode_code_points", "selectors": evidence["selectors"]}
 
-    def entity(self, namespace: str, name: str, scope: str, aliases: list[str] | None = None) -> str:
+    def entity(self, namespace: str, name: str, scope: str, aliases: list[str] | None = None,
+               *, entity_type: str = "character") -> str:
+        if entity_type not in WORLD_TYPES | {"character"}:
+            raise ValueError("unknown entity type")
         name, scope = text(name, 100), text(scope, 160)
-        eid = uid("C", namespace, name, scope)
+        # Preserve legacy character IDs and human review history exactly.
+        eid = (uid("C", namespace, name, scope) if entity_type == "character"
+               else uid("W", namespace, name, scope, entity_type))
         old = self.get("entities", eid)
+        if aliases is not None and (not isinstance(aliases, list) or len(aliases) > 30):
+            raise ValueError("invalid aliases")
         aliases = sorted({text(a, 100) for a in (aliases or [])} | set((old or {}).get("aliases", [])))
-        value = {"id": eid, "name": name, "namespace": namespace, "scope": scope, "aliases": aliases}
+        value = {"id": eid, "name": name, "namespace": namespace, "scope": scope,
+                 "aliases": aliases, "entity_type": entity_type}
         self.db.execute("INSERT OR REPLACE INTO entities VALUES (?,?)", (eid, dump(value)))
         self.db.commit()
         return eid
@@ -230,13 +254,29 @@ class Store:
                   "evidence_ids": body.get("evidence_ids"), "model_checked": body.get("model_checked") is True}
         if result["epistemic"] not in {"explicit", "inferred", "reported"}:
             raise ValueError("unknown epistemic status")
-        if result["kind"] not in {"appearance", "voice", "value", "goal", "belief", "knowledge", "relationship", "attribute"}:
+        domain = body.get("domain", "world" if result["kind"] in WORLD_KINDS else "character")
+        if domain not in {"world", "character"}:
+            raise ValueError("unknown knowledge domain")
+        if result["kind"] not in (WORLD_KINDS if domain == "world" else CHARACTER_KINDS):
             raise ValueError("unknown claim kind")
+        if domain == "world":
+            result.update(domain="world", conditions=short_list(body.get("conditions", [])),
+                          exceptions=short_list(body.get("exceptions", [])),
+                          modality=body.get("modality", "unknown"),
+                          polarity=body.get("polarity", "unknown"),
+                          story_time=None if body.get("story_time") is None else text(body["story_time"], 160))
+            if result["modality"] not in WORLD_MODALITIES or result["polarity"] not in {"affirmed", "denied", "unknown"}:
+                raise ValueError("invalid world rule modality or polarity")
         for k in ("subject", "object"):
             if result[k] is not None:
                 ent = self.get("entities", result[k])
                 if not ent or ent["scope"] != result["scope"]:
-                    raise ValueError("unknown or cross-scope character")
+                    raise ValueError("unknown or cross-scope entity")
+        involved = [self.get("entities", result[k]) for k in ("subject", "object") if result[k]]
+        if domain == "character" and any(entity_type(e) != "character" for e in involved):
+            raise ValueError("character claims require character entities")
+        if domain == "world" and all(entity_type(e) == "character" for e in involved):
+            raise ValueError("world claims require a world entity")
         ids = result["evidence_ids"]
         if not isinstance(ids, list) or not ids or not all(isinstance(e, str) and self.get("evidence", e) for e in ids):
             raise ValueError("claims require registered evidence")
@@ -276,6 +316,8 @@ class Store:
             effective = {k: current[k] for k in current["original"]}
             if action == "correct":
                 allowed = {"subject", "object", "predicate", "value", "kind", "epistemic", "valid_from", "valid_to"}
+                if effective.get("domain") == "world":
+                    allowed |= {"conditions", "exceptions", "modality", "polarity", "story_time"}
                 if not isinstance(patch, dict) or not patch or set(patch) - allowed:
                     raise ValueError("invalid correction fields")
                 effective.update(patch)
@@ -306,8 +348,9 @@ class Store:
 
     def merge(self, source: str, target: str, reviewer: str, note: str) -> None:
         a, b = self.get("entities", source), self.get("entities", target)
-        if not a or not b or a["scope"] != b["scope"] or source == target:
-            raise ValueError("merge requires different characters in the same canon scope")
+        if (not a or not b or a["scope"] != b["scope"] or source == target
+                or entity_type(a) != entity_type(b)):
+            raise ValueError("merge requires different entities of the same type and canon scope")
         if not text(note, 2000):
             raise ValueError("merge requires a reason")
         with self.transaction():
@@ -338,9 +381,11 @@ class Store:
         for c in claims:
             c["stale"] = any(fingerprints.get(self.get("evidence", e)["source_id"]) != self.get("evidence", e)["source_hash"]
                              for e in c["evidence_ids"])
+            c["domain"] = c.get("domain", "character")
             c["display_subject"] = self.canonical(c["subject"])
             c["display_object"] = self.canonical(c["object"]) if c["object"] else None
-        return {"schema": "pastiche.character.graph.v1", "entities": self.rows("entities"), "claims": claims,
+        return {"schema": "pastiche.knowledge.graph.v2",
+                "entities": [dict(e, entity_type=entity_type(e)) for e in self.rows("entities")], "claims": claims,
                 "redirects": dict(self.db.execute("SELECT source,target FROM merges")),
                 "merges": [json.loads(r[0]) for r in self.db.execute("SELECT body FROM merge_history ORDER BY seq")],
                 "layout": {r[0]: {"x": r[1], "y": r[2]} for r in self.db.execute("SELECT id,x,y FROM layout")}}
@@ -357,25 +402,67 @@ class Store:
                         raise ValueError("invalid coordinate")
                 self.db.execute("INSERT OR REPLACE INTO layout VALUES (?,?,?)", (eid, p["x"], p["y"]))
 
-    def writer_context(self, scope: str, cutoff: float = 1.0) -> dict:
+    def _context(self, scope: str, cutoff: float, domain: str) -> dict:
         cutoff = position(cutoff)
         if cutoff is None:
             raise ValueError("cutoff is required")
         graph = self.graph()
         selected = []
         for c in graph["claims"]:
-            if c["scope"] != scope or c["status"] not in {"auto_accepted", "human_approved"} or c["stale"]:
+            if (c["scope"] != scope or c["domain"] != domain
+                    or c["status"] not in USABLE_STATUSES or c["stale"]):
                 continue
-            # Unknown observation time is excluded for spoiler-restricted views.
             if cutoff < 1 and (c["observed_at"] is None or c["observed_at"] > cutoff):
                 continue
             if c["valid_from"] is not None and not c["valid_from"] <= cutoff <= c["valid_to"]:
                 continue
-            selected.append({k: c[k] for k in ("id", "display_subject", "display_object", "predicate", "value", "kind", "epistemic", "status", "model_checked", "observed_at", "valid_from", "valid_to", "evidence_ids")})
+            keys = ("id", "display_subject", "display_object", "predicate", "value", "kind", "epistemic",
+                    "status", "model_checked", "observed_at", "valid_from", "valid_to", "evidence_ids", "revision")
+            value = {k: c[k] for k in keys}
+            if domain == "world":
+                value.update({k: c[k] for k in ("domain", "conditions", "exceptions", "modality", "polarity", "story_time")})
+            selected.append(value)
         used = {c["display_subject"] for c in selected} | {c["display_object"] for c in selected if c["display_object"]}
-        return {"schema": "pastiche.writer.characters.v2", "scope": scope, "cutoff": cutoff,
+        return {"schema": "pastiche.writer.characters.v2" if domain == "character" else "pastiche.writer.world.v1",
+                "scope": scope, "cutoff": cutoff,
                 "entities": [e for e in graph["entities"] if e["id"] in used], "claims": selected,
                 "note": "Auto-accepted source-grounded claims and human-approved edits. Auto-accepted is NOT independently verified or established canon; stale/revoked/rejected/deferred claims are excluded. Unknown duration is not persistence."}
+
+    def writer_context(self, scope: str, cutoff: float = 1.0) -> dict:
+        return self._context(scope, cutoff, "character")
+
+    def world_context(self, scope: str, cutoff: float = 1.0) -> dict:
+        from .world import conflict_candidates
+        context = self._context(scope, cutoff, "world")
+        context["conflicts"] = conflict_candidates(context["claims"])
+        return context
+
+    def world_graph(self) -> dict:
+        graph = self.graph()
+        graph["claims"] = [c for c in graph["claims"] if c["domain"] == "world"]
+        used = {c[k] for c in graph["claims"] for k in ("display_subject", "display_object") if c[k]}
+        graph["entities"] = [e for e in graph["entities"] if entity_type(e) != "character" or e["id"] in used]
+        graph["schema"] = "pastiche.world.graph.v1"
+        from .world import conflict_candidates
+        graph["conflicts"] = conflict_candidates([c for c in graph["claims"]
+            if c["status"] in USABLE_STATUSES and not c["stale"]])
+        return graph
+
+    def validate_context_snapshot(self, context: dict) -> None:
+        """A previously exported file must not resurrect a revoked or stale claim."""
+        for key, domain in (("characters", "character"), ("world", "world")):
+            section = context.get(key, {})
+            if not section.get("claims"):
+                continue
+            current = self._context(context["scope"], context.get("cutoff", 1), domain)
+            available = {c["id"]: c for c in current["claims"]}
+            for c in section["claims"]:
+                active = available.get(c.get("id"))
+                if active is None or any(c.get(k) != active.get(k) for k in
+                        ("value", "status", "predicate", "display_subject", "display_object")):
+                    raise Conflict("writer context is stale or revoked; export it again")
+                if "revision" in c and c["revision"] != active["revision"]:
+                    raise Conflict("writer context revision changed; export it again")
 
 
 def atomic_json(path: Path, body: Any) -> None:

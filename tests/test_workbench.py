@@ -49,7 +49,7 @@ class Model:
                 raise ValueError('synthetic failure')
             if prompt.startswith(('TASK=STORY_EXTRACT', 'TASK=CHARACTER_WEB')):
                 refs = re.findall(r'^\[(S\d+)\]', prompt.split('DATA:\n', 1)[1], re.M)
-                return {'characters': [
+                return {'world_entities': [], 'world_claims': [], 'characters': [
                     {'id': 'a', 'name': 'ミナ', 'aliases': [], 'identity': 'explicit', 'evidence_ids': refs[:1]},
                     {'id': 'b', 'name': 'レン', 'aliases': [], 'identity': 'explicit', 'evidence_ids': refs[:1]}],
                     'events': [

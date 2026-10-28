@@ -1,5 +1,6 @@
 """Real Chromium/HTTP integration; test-only Playwright, never a runtime dependency."""
 from pathlib import Path
+import os
 import sys
 import tempfile
 import threading
@@ -10,6 +11,7 @@ sys.path.insert(0, str(SCRIPTS))
 from story_workbench.store import Store, segments
 from story_workbench.server import make_server
 from playwright.sync_api import sync_playwright, expect
+from component_adapter import load
 
 
 def main():
@@ -32,11 +34,11 @@ def main():
         errors = []
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
+                browser = p.chromium.launch(headless=True, executable_path=os.environ.get("PLAYWRIGHT_EXECUTABLE_PATH"))
                 page = browser.new_page(viewport={'width': 1440, 'height': 1000})
                 page.on('pageerror', lambda error: errors.append(str(error)))
                 url = f'http://127.0.0.1:{server.server_address[1]}/#token={token}'
-                page.goto(url)
+                load(page,server,token)
                 page.wait_for_selector('button.claim')
                 page.locator('button.claim').first.click()
                 page.wait_for_selector('#inspector mark')
@@ -74,7 +76,7 @@ def main():
                 assert page.locator('#graph').is_visible()
                 browser.close()
             assert not errors, errors
-            print('PASS: real Chromium, auto-use, revoke/restore, evidence highlight, export and responsive view')
+            print('PASS: '+('DOM adapter' if os.environ.get('PASTICHE_COMPONENT_ADAPTER') else 'real Chromium HTTP')+', auto-use, revoke/restore, evidence highlight, export and responsive view')
         finally:
             server.shutdown()
             server.server_close()

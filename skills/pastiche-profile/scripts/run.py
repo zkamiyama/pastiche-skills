@@ -190,7 +190,7 @@ def main(argv=None):
                 cli += ["--no-stream"]
             if args.restart:
                 cli += ["--restart"]
-            print(f"[pastiche] backend={backend} model={name} endpoint={endpoint}",flush=True)
+            print(f"[pastiche] backend={backend}; deployment model identifier and endpoint withheld",flush=True)
             if args.check:
                 test_model=narrative.LocalModel(backend,name,endpoint,args.timeout,
                                                 allow_remote=True,allow_insecure_http=True,

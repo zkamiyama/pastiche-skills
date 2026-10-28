@@ -42,7 +42,10 @@ def demo(out):
     p.write_text('ミナは手紙を読んだ。レンの説明を参考にすることにした。\n'
                  'レンはミナに問い返した。「まだ決めていないの？」\n'
                  'ミナは短く答えた。「うん、もう少しだけ」\n'
-                 '二人は静かな駅で返事を待った。\n' * 3, encoding='utf-8')
+                 '二人は静かな駅で返事を待った。\n'
+                 '白灯市は東湾に面している。ミナは航路組合で働く。\n'
+                 '航路組合は白灯市の港を管理する。\n'
+                 '浮航術には充電した潮石が必要だ。ただし灯台の中では予備電源を使える。\n' * 3, encoding='utf-8')
     store = Store(out / 'character_graph.sqlite3')
     try:
         source, body = store.register_source(p, 'demo:original', source_type='synthetic')
@@ -57,7 +60,25 @@ def demo(out):
             store.add_claim({'subject': subject, 'object': obj, 'kind': kind, 'predicate': predicate,
                              'value': value, 'epistemic': 'inferred', 'scope': source['scope'],
                              'observed_at': units[at]['end']/len(body), 'evidence_ids': [q]})
+        world = {name: store.entity(source['id'], name, source['scope'], entity_type=typ)
+                 for name, typ in [('白灯市', 'place'), ('東湾', 'place'), ('航路組合', 'organization'),
+                                   ('浮航術', 'system'), ('潮石', 'artifact')]}
+        for subject, obj, kind, predicate, value, at in (
+                (world['白灯市'], world['東湾'], 'geography', 'faces', '湾に面する都市', 4),
+                (a, world['航路組合'], 'affiliation', 'member_of', '組合で勤務している', 4),
+                (world['航路組合'], world['白灯市'], 'institution', 'manages_port', '港の運営主体', 5),
+                (world['浮航術'], world['潮石'], 'magic', 'requires', '充填された資源を必要とする', 6)):
+            q = store.evidence_for(source, units, [units[at]['id']], len(body))
+            store.add_claim({'subject': subject, 'object': obj, 'domain': 'world', 'kind': kind,
+                             'predicate': predicate, 'value': value, 'scope': source['scope'],
+                             'epistemic': 'explicit', 'polarity': 'affirmed',
+                             'modality': 'capability' if kind == 'magic' else 'descriptive',
+                             'conditions': ['潮石が充電されている'] if kind == 'magic' else [],
+                             'exceptions': ['灯台内では予備電源を使用できる'] if kind == 'magic' else [],
+                             'observed_at': units[at]['end']/len(body), 'evidence_ids': [q]})
         atomic_json(out / 'character_graph.json', store.graph())
+        from story_workbench.world import export_world
+        export_world(store, out, source['scope'])
     finally:
         store.close()
     return {'status': 'synthetic_demo', 'out': str(out)}
@@ -91,6 +112,23 @@ def main(argv=None):
     r.add_argument('--delay', type=float, default=2)
     r.add_argument('--allow-http', action='store_true')
     model_flags(r)
+    wr = commands.add_parser('world-research', help='bounded public source research for world rules, geography and institutions')
+    wr.add_argument('--out', type=Path, required=True)
+    wr.add_argument('--seed', action='append', required=True)
+    wr.add_argument('--domain', action='append', required=True)
+    wr.add_argument('--topic', required=True)
+    wr.add_argument('--universe', required=True)
+    wr.add_argument('--canon-scope', required=True)
+    wr.add_argument('--source-type', choices=('official', 'creator', 'licensed', 'fan', 'unclassified'), default='unclassified')
+    wr.add_argument('--max-pages', type=int, default=8)
+    wr.add_argument('--depth', type=int, default=1)
+    wr.add_argument('--delay', type=float, default=2)
+    wr.add_argument('--allow-http', action='store_true')
+    model_flags(wr)
+    wx = commands.add_parser('world-export', help='refresh scoped world graph/bible from current reviewed or auto-accepted claims')
+    wx.add_argument('--out', type=Path, required=True)
+    wx.add_argument('--canon-scope', required=True)
+    wx.add_argument('--cutoff', type=float, default=1)
     s = commands.add_parser('serve', help='local token-protected review editor; no inference or external network')
     s.add_argument('--out', type=Path, required=True)
     s.add_argument('--port', type=int, default=8765)
@@ -100,6 +138,8 @@ def main(argv=None):
     e.add_argument('--cutoff', type=float, default=1)
     e.add_argument('--character-mode', choices=('original', 'canon'), default='original')
     e.add_argument('--character-id', action='append')
+    e.add_argument('--world-mode', choices=('original', 'canon'), default='original')
+    e.add_argument('--world-entity-id', action='append')
     w = commands.add_parser('plan', help='generate and validate a hierarchical new-story plan from an exported context')
     w.add_argument('--out', type=Path, required=True)
     w.add_argument('--context', type=Path, required=True)
@@ -123,19 +163,28 @@ def main(argv=None):
                 chunk_chars=args.chunk_chars, workers=args.llm_workers, retries=args.retries, interval=args.progress_interval,
                 works_limit=args.analysis_works, fanout=args.story_fanout, panel_size=args.story_panel_size,
                 rounds=args.story_rounds, restart=args.restart)
-        elif args.command == 'research':
+        elif args.command in {'research', 'world-research'}:
             from story_workbench.research import research
             result = research(args.out, args.seed, {d.lower().rstrip('.') for d in args.domain}, model_from(args),
-                character=args.character, universe=args.universe, scope=args.canon_scope, source_type=args.source_type,
+                character=args.character if args.command == 'research' else args.topic, universe=args.universe, scope=args.canon_scope, source_type=args.source_type,
                 max_pages=args.max_pages, depth=args.depth, delay=args.delay, workers=args.llm_workers,
-                retries=args.retries, interval=args.progress_interval, allow_http=args.allow_http)
+                retries=args.retries, interval=args.progress_interval, allow_http=args.allow_http,
+                target_kind='world' if args.command == 'world-research' else 'character')
+        elif args.command == 'world-export':
+            from story_workbench.world import export_world
+            store = Store(args.out / 'character_graph.sqlite3')
+            try:
+                result = export_world(store, args.out, args.canon_scope, args.cutoff)
+            finally:
+                store.close()
         elif args.command == 'serve':
             from story_workbench.server import serve
             serve(args.out, args.port)
             return 0
         elif args.command == 'export':
             from story_workbench.writing import prepare
-            result = prepare(args.out, args.canon_scope, args.cutoff, mode=args.character_mode, character_ids=args.character_id)
+            result = prepare(args.out, args.canon_scope, args.cutoff, mode=args.character_mode, character_ids=args.character_id,
+                             world_mode=args.world_mode, world_entity_ids=args.world_entity_id)
         elif args.command in {'plan', 'audit-plan', 'audit-draft'}:
             from story_workbench import writing
             context = json.loads(args.context.read_text(encoding='utf-8'))

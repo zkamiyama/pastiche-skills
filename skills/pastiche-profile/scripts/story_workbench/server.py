@@ -67,14 +67,19 @@ def make_server(out: Path, port=8765, token: str | None = None):
                 key = query.get("id", [""])[0]
                 if path == "/api/graph":
                     data = store.graph()
+                    from .world import conflict_candidates
+                    data["world_conflicts"] = conflict_candidates([c for c in data["claims"]
+                        if c.get("domain") == "world" and c["status"] in {"auto_accepted", "human_approved"} and not c["stale"]])
                     data["sources"] = [{k: s[k] for k in ("id", "label", "scope", "source_type")} for s in store.rows("sources")]
+                elif path == "/api/world":
+                    data = store.world_graph()
                 elif path == "/api/evidence":
                     data = store.resolve_evidence(key)
                 elif path == "/api/history":
                     data = store.history(key)
                 elif path == "/api/stories":
                     data = {}
-                    for name in ("story_maps.json", "plot_patterns.json", "story_audit.json"):
+                    for name in ("story_maps.json", "plot_patterns.json", "story_audit.json", "world_audit.json"):
                         p = out / name
                         data[name] = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else None
                 else:
@@ -110,7 +115,7 @@ def make_server(out: Path, port=8765, token: str | None = None):
                     store.unmerge(body["source"], body["reviewer"], body["note"])
                     result = {"ok": True}
                 elif path == "/api/entity":
-                    result = {"id": store.entity("manual", body["name"], body["scope"])}
+                    result = {"id": store.entity("manual", body["name"], body["scope"], entity_type=body.get("entity_type", "character"))}
                 elif path == "/api/claim":
                     body["model_checked"] = False
                     result = {"id": store.add_claim(body)}
@@ -124,7 +129,8 @@ def make_server(out: Path, port=8765, token: str | None = None):
                 elif path == "/api/export":
                     if not body.get("scope") or body["scope"] == "*":
                         raise ValueError("Select one canon scope before exporting")
-                    result = prepare(out, body["scope"], body.get("cutoff", 1), mode=body.get("mode", "original"))
+                    result = prepare(out, body["scope"], body.get("cutoff", 1), mode=body.get("mode", "original"),
+                                     world_mode=body.get("world_mode", "original"))
                 else:
                     return self.send(404, {"error": "Not found"})
                 self.send(200, result)
