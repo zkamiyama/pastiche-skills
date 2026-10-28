@@ -29,6 +29,15 @@ Use only generated profile artifacts, not the original corpus. `lexical_inventor
 - Does every scene belong exactly once to a plot-tree leaf and have valid prior dependencies?
 - Are character and reader knowledge separate, with no use before acquisition?
 - Are original/canon modes explicit, with canon scope and presentation cutoff fixed?
-- Are character constraints current human-approved claims, never pending model inferences or stale source versions?
+- Are character constraints current usable auto-accepted/human-reviewed claims, with uncertainty preserved and revoked/stale claims excluded?
 - Are conditional voice, audience, reported speech, belief and fact distinguished?
 - Did structural revision happen before surface imitation? Does a source-cited LLM draft audit remain clearly a model judgment?
+
+## v3 perspective contract
+
+- Are world, private beliefs, heard reports and reader disclosures separate?
+- Do events change only the perspectives that have declared perceptual access?
+- Are every action's mental premises declared, with false belief distinguished from knowledge?
+- Does the scene writer receive only the intended character-view context, not director truth?
+- Have model-detected access/scene mismatches been repaired? An empty issue list is not proof.
+- Are subagent tasks private and validated on resume, rather than unreviewed raw answers?

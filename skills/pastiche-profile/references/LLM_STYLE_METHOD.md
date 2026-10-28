@@ -1,6 +1,6 @@
 # LLM-first Style Induction — method and limits
 
-This describes the current `run.py --mode llm` implementation (`llm_style.py` + `llm_style_core.py`). The older string-similarity method remains under `--mode fast` for comparison; `NARRATIVE_METHOD.md` describes the legacy narrative extractor.
+This describes the current `run.py --mode llm` implementation (`llm_style.py` + `llm_style_core.py`). Retired string-similarity/full-ontology execution paths have been removed in v3.
 
 ## Objective and scope
 
@@ -13,7 +13,7 @@ The output must not be interpreted as proof of author identity, unique authorial
 
 ## Phase A: Sampling and observations
 
-`narrative.enumerated_corpus` assigns anonymous work IDs. `narrative.chunk_segments` creates bounded chunks with segment IDs. `narrative_fast.stratified_indices` distributes sampling over the *sorted* eligible works; `select_chunks` samples different portions of each selected work.
+`corpus.enumerated_corpus` assigns anonymous work IDs. `corpus.chunk_segments` creates bounded chunks with segment IDs. `corpus.stratified_indices` distributes sampling over the *sorted* eligible works; `select_chunks` samples different portions of each selected work.
 
 - Default: **all eligible works × up to 2 passages per work** (`--analysis-works 0`). For example, 91 eligible works yield up to 182 scene requests, rather than analyzing all 630 source chunks. This intentionally samples *every work* but not *every passage*.
 - To reduce LLM requests, specify a positive `--analysis-works N` limit. This caps the number of works sampled, not the number of passages in each selected work.
@@ -63,8 +63,7 @@ When any pattern is source-screened, one more LLM call summarizes only **support
 | `qualitative_summary.json` | LLM-authored, cross-work guidance citing supported pattern IDs |
 | `narrative_rules.json` | Model-supported narrative patterns + separated hypotheses (`pastiche.narrative.v2`) |
 | `style_llm_audit.json` | Stage-specific calls/cache hits, number of groups and source-confirmed patterns |
-| `narrative_audit.json` | Same LLM-first audit (compatibility) |
-| `narrative_progress.json` | `running` / `failed` / `interrupted` / `completed` |
+| `llm_progress.json` | `running` / `failed` / `interrupted` / `completed` |
 | `style_llm_checkpoint.sqlite3` | Resume state; does not contain passages |
 | `style_bible.md` | Deterministic measurements + lexical preference + evidence-screened qualitative and narrative advice |
 

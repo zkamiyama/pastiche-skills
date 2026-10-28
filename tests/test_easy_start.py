@@ -10,11 +10,13 @@ import unittest
 SCRIPTS = Path(__file__).resolve().parents[1] / "skills" / "pastiche-profile" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 import run
+import execution
+import llm_runtime
 
 
 class EasyStartTests(unittest.TestCase):
     def test_prefixed_openai_base_url(self):
-        backend, endpoint, base, models = run.resolve_url("http://192.0.2.12/llm/v1", "auto")
+        backend, endpoint, base, models = execution.resolve_url("http://192.0.2.12/llm/v1", "auto")
         self.assertEqual(backend, "openai-compatible")
         self.assertEqual(endpoint, "http://192.0.2.12/llm/v1/chat/completions")
         self.assertEqual(base, "http://192.0.2.12/llm/v1")
@@ -32,7 +34,7 @@ class EasyStartTests(unittest.TestCase):
                           "models": [{"id": "not-selected"}]}
             }}), encoding="utf-8")
             with patch.object(Path, "home", return_value=home):
-                self.assertEqual(run.model_id(None, "http://192.0.2.12/llm/v1",
+                self.assertEqual(execution.model_id(None, "http://192.0.2.12/llm/v1",
                                                "openai-compatible",
                                                "http://192.0.2.12/llm/v1/models"), "model-placeholder")
 
@@ -64,8 +66,8 @@ class EasyStartTests(unittest.TestCase):
         from contextlib import redirect_stdout
         from io import StringIO
         output = StringIO()
-        with patch.object(run, "model_id", return_value="private-fixture-model"), \
-             patch.object(run.narrative, "LocalModel") as model, redirect_stdout(output):
+        with patch.object(execution, "model_id", return_value="private-fixture-model"), \
+             patch.object(llm_runtime, "HTTPModel") as model, redirect_stdout(output):
             model.return_value.ask.return_value = {"ok": True}
             code = run.main(["/not-a-corpus", "--api-base", "http://127.0.0.1/v1", "--check"])
         self.assertEqual(code, 0)
@@ -75,8 +77,8 @@ class EasyStartTests(unittest.TestCase):
     def test_check_sends_only_synthetic_request(self):
         with TemporaryDirectory() as temporary:
             missing = str(Path(temporary) / "not-a-corpus")
-            with patch.object(run, "model_id", return_value="model-placeholder"), \
-                 patch.object(run.narrative, "LocalModel") as model:
+            with patch.object(execution, "model_id", return_value="model-placeholder"), \
+                 patch.object(llm_runtime, "HTTPModel") as model:
                 model.return_value.ask.return_value = {"ok": True}
                 result = run.main([missing, "--api-base", "http://127.0.0.1/llm/v1", "--check"])
                 self.assertEqual(result, 0)

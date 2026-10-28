@@ -71,6 +71,19 @@ def make_server(out: Path, port=8765, token: str | None = None):
                     data["world_conflicts"] = conflict_candidates([c for c in data["claims"]
                         if c.get("domain") == "world" and c["status"] in {"auto_accepted", "human_approved"} and not c["stale"]])
                     data["sources"] = [{k: s[k] for k in ("id", "label", "scope", "source_type")} for s in store.rows("sources")]
+                elif path == "/api/perspectives":
+                    scope = query.get("scope", [""])[0]
+                    if not scope or scope == "*":
+                        raise ValueError("select one scope")
+                    data = store.perspective_context(scope, float(query.get("cutoff", [1])[0]))
+                elif path == "/api/perspective-plan":
+                    from .epistemic import simulate
+                    plan_path = out / "writing" / "story_blueprint.json"
+                    if plan_path.is_file():
+                        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+                        data = simulate(plan["epistemic"], plan["scenes"], plan["characters"])
+                    else:
+                        data = {"events": [], "note": "No authored perspective timeline yet."}
                 elif path == "/api/world":
                     data = store.world_graph()
                 elif path == "/api/evidence":

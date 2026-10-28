@@ -9,10 +9,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import re
 from typing import Any
 
-import narrative_fast
+import corpus as corpus_utils
 
 VERSION = "1.0.1"
 MAX_OBSERVATIONS = 7
@@ -74,7 +73,7 @@ def clean_observations(reply: Any, chunk: list[tuple[str, str]]) -> list[dict[st
         fields = ("trigger", "technique", "effect")
         if not all(plain(item.get(field)) for field in fields):
             continue
-        if any(narrative_fast._is_verbatim_fragment(item[field], chunk)
+        if any(corpus_utils._is_verbatim_fragment(item[field], chunk)
                for field in fields):
             continue
         evidence = item.get("evidence_ids")
@@ -254,7 +253,7 @@ def valid_evidence(raw: Any, item: dict[str, Any],
 
 
 def synthesize_prompt(patterns: list[dict[str, Any]]) -> str:
-    """Summarize only source-screened patterns, never the source corpus."""
+    """Summarize only source-screened patterns, never the source corpus_utils."""
     compact = [{
         "pattern_id": p["pattern_id"], "dimension": p["dimension"],
         "trigger": p["trigger"], "mechanism": p["mechanism"],

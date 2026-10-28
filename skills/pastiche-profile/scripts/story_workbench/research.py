@@ -5,6 +5,7 @@ search tool. This helper follows approved seed links; it is not a search engine
 and does not bypass paywalls, authentication or JavaScript challenges.
 """
 from __future__ import annotations
+from task_transport import TasksPending
 from collections import deque
 from html.parser import HTMLParser
 import http.client
@@ -17,7 +18,8 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
 
 from .store import Store, uid, dump, now, segments, chunked, atomic_json
-from .protocol import Engine, Task, extract_prompt, parse_extract
+from .protocol import extract_prompt, parse_extract
+from .engine import Engine, Task
 from .pipeline import ingest
 
 AGENT = "PasticheResearch/2.0"
@@ -260,7 +262,7 @@ def research(out: Path, seeds: list[str], domains: set[str], model, *, character
         return audit
     except BaseException as exc:
         atomic_json(audit_path, {**audit_base,
-                    "state": "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed",
+                    "state": "waiting_for_tasks" if isinstance(exc, TasksPending) else "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed",
                     "error_type": type(exc).__name__, "finished_at": now()})
         raise
     finally:

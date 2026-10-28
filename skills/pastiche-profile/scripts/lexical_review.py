@@ -9,13 +9,15 @@ frequencies. Source passages, titles and filenames are never sent to the model.
 from __future__ import annotations
 
 import argparse
+import execution
+from task_transport import TasksPending
 import hashlib
 import json
 from pathlib import Path
 import sys
 from typing import Any
 
-from narrative import LocalModel, CheckpointStore, ProgressReporter, ModelRequestError, atomic_json_write, model_jobs
+from llm_runtime import CheckpointStore, ProgressReporter, ModelRequestError, atomic_json_write, model_jobs
 
 SCHEMA = 'pastiche.lexical.judgments.v1'
 VERSION = '0.1.0'
@@ -202,7 +204,7 @@ def assess(candidate_file:Path,out:Path,model:Any,*,batch_size:int=24,retries:in
                      f'calls={actual_calls}, cached_batches={cached}')
         return result
     except BaseException as exc:
-        reporter.status(state='interrupted' if isinstance(exc,KeyboardInterrupt) else 'failed',
+        reporter.status(state='waiting_for_tasks' if isinstance(exc, TasksPending) else 'interrupted' if isinstance(exc,KeyboardInterrupt) else 'failed',
                         stage='LEXICAL_REVIEW_STOPPED')
         raise
     finally:
@@ -213,30 +215,20 @@ def main(argv:list[str]|None=None)->int:
     ap=argparse.ArgumentParser(description='Short-form lexical typicality using a selected model (no source passages)')
     ap.add_argument('--candidates',type=Path,required=True)
     ap.add_argument('--out',type=Path,default=Path('.pastiche-private/profile'))
-    ap.add_argument('--backend',choices=('ollama','openai-compatible'),required=True)
-    ap.add_argument('--endpoint',required=True)
-    ap.add_argument('--model',required=True)
-    ap.add_argument('--allow-remote',action='store_true')
-    ap.add_argument('--allow-insecure-http',action='store_true')
-    ap.add_argument('--api-key-env')
-    ap.add_argument('--no-stream',action='store_true')
-    ap.add_argument('--timeout',type=int,default=0)
     ap.add_argument('--batch-size',type=int,default=24)
-    ap.add_argument('--llm-workers',type=int,default=1,help='concurrent model requests (default: 1)')
-    ap.add_argument('--retries',type=int,default=2)
-    ap.add_argument('--progress-interval',type=float,default=15)
     ap.add_argument('--restart',action='store_true')
+    execution.add_model_flags(ap)
     args=ap.parse_args(argv)
     try:
-        model=LocalModel(args.backend,args.model,args.endpoint,args.timeout,
-                         args.allow_remote,args.allow_insecure_http,args.api_key_env,
-                         not args.no_stream)
+        model = execution.model_from(args)
         obj=assess(args.candidates,args.out,model,batch_size=args.batch_size,
                    retries=args.retries,progress_interval=args.progress_interval,
                    restart=args.restart,llm_workers=args.llm_workers)
         print(json.dumps({'candidates':obj['candidate_count'],'reviewed':obj['reviewed_count'],
                           'model_calls':obj['actual_model_calls_this_run']},ensure_ascii=False))
         return 0
+    except TasksPending:
+        return TasksPending.exit_code
     except (OSError,ValueError,TypeError,KeyError) as exc:
         print(f'error: {exc}',file=sys.stderr)
         return 2

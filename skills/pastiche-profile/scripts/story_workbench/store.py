@@ -255,9 +255,9 @@ class Store:
         if result["epistemic"] not in {"explicit", "inferred", "reported"}:
             raise ValueError("unknown epistemic status")
         domain = body.get("domain", "world" if result["kind"] in WORLD_KINDS else "character")
-        if domain not in {"world", "character"}:
+        if domain not in {"world", "character", "epistemic"}:
             raise ValueError("unknown knowledge domain")
-        if result["kind"] not in (WORLD_KINDS if domain == "world" else CHARACTER_KINDS):
+        if result["kind"] not in ({"perspective"} if domain == "epistemic" else WORLD_KINDS if domain == "world" else CHARACTER_KINDS):
             raise ValueError("unknown claim kind")
         if domain == "world":
             result.update(domain="world", conditions=short_list(body.get("conditions", [])),
@@ -267,6 +267,26 @@ class Store:
                           story_time=None if body.get("story_time") is None else text(body["story_time"], 160))
             if result["modality"] not in WORLD_MODALITIES or result["polarity"] not in {"affirmed", "denied", "unknown"}:
                 raise ValueError("invalid world rule modality or polarity")
+        if domain == "epistemic":
+            from .epistemic import BASES, RESERVED
+            holder, prop, speaker = body.get("holder"), body.get("proposition_subject"), body.get("speaker")
+            for key in [holder, prop, speaker]:
+                if key in RESERVED or key is None:
+                    continue
+                ent = self.get("entities", key)
+                if not ent or ent["scope"] != result["scope"]:
+                    raise ValueError("unknown or cross-scope perspective entity")
+            if (holder not in RESERVED and (not holder or entity_type(self.get("entities", holder)) != "character")):
+                raise ValueError("perspective holder must be a character/world/reader")
+            if not prop or prop != result["object"] or result["subject"] != (prop if holder in RESERVED else holder):
+                raise ValueError("perspective endpoints and holder do not agree")
+            if speaker is not None and entity_type(self.get("entities", speaker)) != "character":
+                raise ValueError("speaker must be a character")
+            if body.get("stance") not in {"affirmed", "denied", "uncertain"} or body.get("basis") not in BASES:
+                raise ValueError("invalid perspective stance or acquisition basis")
+            result.update(domain=domain, holder=holder, proposition_subject=prop, speaker=speaker,
+                          stance=body["stance"], basis=body["basis"],
+                          event_id=None if body.get("event_id") is None else text(body["event_id"], 100))
         for k in ("subject", "object"):
             if result[k] is not None:
                 ent = self.get("entities", result[k])
@@ -318,6 +338,8 @@ class Store:
                 allowed = {"subject", "object", "predicate", "value", "kind", "epistemic", "valid_from", "valid_to"}
                 if effective.get("domain") == "world":
                     allowed |= {"conditions", "exceptions", "modality", "polarity", "story_time"}
+                if effective.get("domain") == "epistemic":
+                    allowed |= {"holder", "proposition_subject", "stance", "basis", "speaker", "event_id"}
                 if not isinstance(patch, dict) or not patch or set(patch) - allowed:
                     raise ValueError("invalid correction fields")
                 effective.update(patch)
@@ -421,15 +443,26 @@ class Store:
             value = {k: c[k] for k in keys}
             if domain == "world":
                 value.update({k: c[k] for k in ("domain", "conditions", "exceptions", "modality", "polarity", "story_time")})
+            if domain == "epistemic":
+                value.update({k: c[k] for k in ("domain", "holder", "proposition_subject", "stance", "basis", "speaker", "event_id")})
+                for key in ("holder", "proposition_subject", "speaker"):
+                    if value[key] and not value[key].startswith("$"):
+                        value[key] = self.canonical(value[key])
             selected.append(value)
         used = {c["display_subject"] for c in selected} | {c["display_object"] for c in selected if c["display_object"]}
-        return {"schema": "pastiche.writer.characters.v2" if domain == "character" else "pastiche.writer.world.v1",
+        if domain == "epistemic":
+            used.update(c[k] for c in selected for k in ("holder", "proposition_subject", "speaker") if c[k] and not c[k].startswith("$"))
+        return {"schema": {"character":"pastiche.writer.characters.v2", "world":"pastiche.writer.world.v1",
+                           "epistemic":"pastiche.writer.perspectives.v1"}[domain],
                 "scope": scope, "cutoff": cutoff,
                 "entities": [e for e in graph["entities"] if e["id"] in used], "claims": selected,
                 "note": "Auto-accepted source-grounded claims and human-approved edits. Auto-accepted is NOT independently verified or established canon; stale/revoked/rejected/deferred claims are excluded. Unknown duration is not persistence."}
 
     def writer_context(self, scope: str, cutoff: float = 1.0) -> dict:
         return self._context(scope, cutoff, "character")
+
+    def perspective_context(self, scope: str, cutoff: float = 1.0) -> dict:
+        return self._context(scope, cutoff, "epistemic")
 
     def world_context(self, scope: str, cutoff: float = 1.0) -> dict:
         from .world import conflict_candidates
@@ -449,20 +482,23 @@ class Store:
         return graph
 
     def validate_context_snapshot(self, context: dict) -> None:
-        """A previously exported file must not resurrect a revoked or stale claim."""
-        for key, domain in (("characters", "character"), ("world", "world")):
+        """Validate the whole exported record, not just its visible description."""
+        if context.get("schema") != "pastiche.writer.context.v4":
+            raise Conflict("writer context schema changed; export current v4 context")
+        for key, domain in (("characters", "character"), ("world", "world"), ("perspectives", "epistemic")):
             section = context.get(key, {})
             if not section.get("claims"):
                 continue
             current = self._context(context["scope"], context.get("cutoff", 1), domain)
+            if section.get("scope") != current["scope"] or section.get("cutoff") != current["cutoff"]:
+                raise Conflict("context scope/cutoff differs; export it again")
             available = {c["id"]: c for c in current["claims"]}
             for c in section["claims"]:
-                active = available.get(c.get("id"))
-                if active is None or any(c.get(k) != active.get(k) for k in
-                        ("value", "status", "predicate", "display_subject", "display_object")):
-                    raise Conflict("writer context is stale or revoked; export it again")
-                if "revision" in c and c["revision"] != active["revision"]:
-                    raise Conflict("writer context revision changed; export it again")
+                if available.get(c.get("id")) != c:
+                    raise Conflict("writer context is changed, stale or revoked; export it again")
+            entities = {e["id"]: e for e in current["entities"]}
+            if any(entities.get(e.get("id")) != e for e in section.get("entities", [])):
+                raise Conflict("context entity identity changed; export it again")
 
 
 def atomic_json(path: Path, body: Any) -> None:

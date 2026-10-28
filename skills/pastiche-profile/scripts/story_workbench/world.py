@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from .store import (Store, WORLD_TYPES, WORLD_KINDS, WORLD_MODALITIES, text,
                     short_list, entity_type, atomic_json, dump)

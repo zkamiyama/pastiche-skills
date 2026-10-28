@@ -3,7 +3,7 @@ name: pastiche-profile
 description: >-
   日本語TXTコーパスの全文統計、根拠付きLLM質的分析、全文の階層的物語構造と人物グラフを統合する。語彙・情感・語り口・台詞・感覚・テンポを場面サンプルから調べ、物語・人物は別経路で全選択作品の全チャンクを読む。モデル推定と人間の承認を分離する。
 license: MIT
-compatibility: Python 3.10+; fugashi-plus/unidic-lite auto-provisioned in a cached venv at first use; LLM stages need Ollama or compatible HTTP(S) API.
+compatibility: Python 3.10+; fugashi-plus/unidic-lite auto-provisioned in a cached venv at first use; LLM stages use HTTP APIs or a private host-subagent task handoff.
 ---
 
 # Pastiche Profile — LLM-first, evidence-grounded
@@ -23,7 +23,7 @@ python3 -u scripts/run.py "/path/to/corpus" \
   --canon-scope work:original --llm-workers 2
 ```
 
-- デフォルトは `--mode llm`。`fast/full` は旧方式の互換・比較用、`none` はLLMなしの計測。
+- デフォルトは `--mode llm`。旧 `fast/full` は削除済み。`none` はLLMなしの計測。
 - **標準の全文経路では、選択された作品の全文をチャンクに分けて指定モデルサーバーへ送る。** 文体用のサンプル原文と短い語形も送信する。ローカルコーパスだからローカル推論とは限らない。送信先を確認し、原文を一部しか送らないと説明しない。
 - HTTPは暗号化されない。認証は `--api-key-env` で環境変数から渡し、リモートの認証にはHTTPSを使う。
 - `--check` は合成JSONだけで疎通確認し、コーパスを開かない。
@@ -56,7 +56,7 @@ python3 -u scripts/run.py "/path/to/corpus" \
 
 ## 完了・再開・品質の検査
 
-- 文体経路は `narrative_progress.json` の `state=completed` を確認。全文経路は `story_audit.json` と `story_progress.json` も完了で、`scanned_chunks=full_chunks` を確認する。全文を入力したことと理解が正しいことは別。
+- 文体経路は `llm_progress.json` の `state=completed` を確認。全文経路は `story_audit.json` と `story_progress.json` も完了で、`scanned_chunks=full_chunks` を確認する。全文を入力したことと理解が正しいことは別。
 - `style_llm_audit.json` の観察数・作品横断グループ数・再検証数を区別し、0件を架空の特徴で埋めない。
 - LLMの要求だけを `--llm-workers N` で並列化し、SQLite書き込みはメインスレッドに限定する。
 - 中断時は同じコマンドを再実行。`--restart` はモデルのタスクキャッシュを再計算する指定で、人間の判断履歴を消す指示ではない。
@@ -67,7 +67,7 @@ python3 -u scripts/run.py "/path/to/corpus" \
 
 統計・定性的な表現方法・抽象的な構造候補を `style_bible.md` に統合する。`pastiche-write` は新規の人物・題材を既定とし、既存キャラクターを使う場合は利用者の明示指定、作品版、時点、および出典付きで利用可能な人物情報（自動採用は未確認の推定）を参照する。元作品の長い文言や具体的な筋書きの転用を避ける。
 
-全文経路・グラフ・研究・執筆の技術仕様は `docs/STORY_CHARACTER_WORKBENCH.md`。文体経路は `references/LLM_STYLE_METHOD.md`、旧方式は `references/NARRATIVE_METHOD.md`。独自実装であり、特定論文やベンチマークの再現を主張しない。合成テストは `python3 -m unittest discover -s tests -v`。
+全文経路・グラフ・研究・執筆の技術仕様は `docs/STORY_CHARACTER_WORKBENCH.md`。文体経路は `references/LLM_STYLE_METHOD.md`。独自実装であり、特定論文やベンチマークの再現を主張しない。合成テストは `python3 -m unittest discover -s tests -v`。
 
 ## 世界観（World Knowledge Graph）
 
@@ -80,3 +80,11 @@ python3 -u scripts/run.py "/path/to/corpus" \
 - 原典調査は別の `world-research` を利用者が明示した場合にだけ実行する。コーパス名を勝手にWebへ送信しない。
 
 実装の境界とコマンドは `docs/WORLD_KNOWLEDGE_GRAPH.md`。更新時のモデルキャッシュ再計算を、人物の人間レビューを消去する理由にしない。
+
+## v3の認識・信念とサブエージェント
+
+- 全文抽出で `perspectives` を必須にし、人物の信念、作中世界の記述、読者への開示を分離する。配列欠落を「信念がない」という結果へ変換しない。根拠位置を人物の観測時刻と混同しない。
+- `perspective_context.json` は原文における認識の観察記録であり、全人物の完全な心理シミュレーションではない。
+- HTTP以外では `--executor subagent --task-dir /private/tasks` を使い、`pastiche-llm-worker` の手順でホストがタスクを実行する。終了コード75は待機中。全件を完了扱いしない。HTTP用のmodel/endpoint/key引数は併用しない。
+- サブエージェント方式のタスクファイルは原文を含むprivateデータ。原文を親の不要なコンテキストに集約せず、指定子エージェントへ必要なタスクだけ渡す。
+- v3は旧CLI `fast/full` と重複監査出力を削除した。DBレビューは維持し、キャッシュ更新と人間の判断の消去を混同しない。

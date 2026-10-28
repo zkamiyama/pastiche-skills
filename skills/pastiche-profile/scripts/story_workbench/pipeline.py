@@ -5,15 +5,15 @@ understood every detail. Patterns remain model-supported hypotheses, not an
 implementation or claimed reproduction of any particular research paper.
 """
 from __future__ import annotations
-from collections import Counter
+from task_transport import TasksPending
 from pathlib import Path
 from typing import Any
 
-import narrative
-import narrative_fast
+import corpus as corpus_utils
 from . import VERSION
 from .store import Store, uid, text, dump, segments, chunked, atomic_json, now, read_source
-from .protocol import Engine, Task, array, ids, extract_prompt, parse_extract, outline_prompt, parse_outline, LINKS
+from .protocol import array, ids, extract_prompt, parse_extract, outline_prompt, parse_outline, LINKS
+from .engine import Engine, Task
 
 
 def ingest(store: Store, source: dict, units: list[dict], raw: dict, chunk_index: int,
@@ -54,6 +54,20 @@ def ingest(store: Store, source: dict, units: list[dict], raw: dict, chunk_index
                         "domain", "conditions", "exceptions", "modality", "polarity", "story_time")},
                         "subject": all_entities[claim["subject"]], "object": all_entities.get(claim["object"]),
                         "scope": source["scope"], "evidence_ids": [q], "observed_at": observed(claim["evidence_ids"])}))
+    for record in raw["perspectives"]:
+        prop = record["proposition"]
+        target = all_entities[prop["subject"]]
+        holder = all_entities.get(record["holder"], record["holder"])
+        speaker = actors.get(record["speaker"])
+        q = evidence(record["evidence_ids"])
+        claims.append(store.add_claim({"domain": "epistemic", "kind": "perspective",
+            "subject": target if holder.startswith("$") else holder, "object": target,
+            "predicate": prop["predicate"], "value": prop["value"], "scope": source["scope"],
+            "holder": holder, "proposition_subject": target, "stance": record["stance"],
+            "basis": record["basis"], "speaker": speaker,
+            "event_id": event_ids.get(record["event_id"]),
+            "epistemic": "reported" if record["basis"] == "communication" else "inferred",
+            "observed_at": observed(record["evidence_ids"]), "evidence_ids": [q]}))
     for link in raw["links"]:
         links.append({"source": event_ids[link["source"]], "target": event_ids[link["target"]],
                       "kind": link["kind"], "evidence_ids": [evidence(link["evidence_ids"])],
@@ -329,7 +343,7 @@ def analyze(corpus: Path, out: Path, model: Any, *, scope="corpus:original", chu
     atomic_json(out / "story_audit.json", manifest)
     atomic_json(out / "world_audit.json", {"state": "running", "version": VERSION})
     try:
-        paths = narrative.input_files(corpus)
+        paths = corpus_utils.input_files(corpus)
         registered, skipped = [], 0
         for path in paths:
             try:
@@ -343,7 +357,7 @@ def analyze(corpus: Path, out: Path, model: Any, *, scope="corpus:original", chu
             registered.append((source, body))
         if not registered:
             raise ValueError("no eligible story text")
-        selected = narrative_fast.stratified_indices(len(registered), works_limit or len(registered))
+        selected = corpus_utils.stratified_indices(len(registered), works_limit or len(registered))
         chosen = [registered[i] for i in selected]
         tasks, payload, works = [], {}, []
         for source, body in chosen:
@@ -385,6 +399,7 @@ def analyze(corpus: Path, out: Path, model: Any, *, scope="corpus:original", chu
         (out / "story_maps.jsonl").write_text("".join(dump(w)+"\n" for w in works), encoding="utf-8")
         atomic_json(out / "plot_patterns.json", bundle)
         atomic_json(out / "character_graph.json", store.graph())
+        atomic_json(out / "perspective_context.json", store.perspective_context(scope))
         from .world import export_world
         world_stats = export_world(store, out, scope)
         atomic_json(out / "world_audit.json", {"state": "completed", "version": VERSION,
@@ -402,7 +417,7 @@ def analyze(corpus: Path, out: Path, model: Any, *, scope="corpus:original", chu
         atomic_json(out / "story_progress.json", {"state": "completed", **engine.stats})
         return manifest
     except BaseException as exc:
-        manifest.update(state="interrupted" if isinstance(exc, KeyboardInterrupt) else "failed", error_type=type(exc).__name__, **engine.stats)
+        manifest.update(state="waiting_for_tasks" if isinstance(exc, TasksPending) else "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed", error_type=type(exc).__name__, **engine.stats)
         atomic_json(out / "story_audit.json", manifest)
         atomic_json(out / "story_progress.json", manifest)
         atomic_json(out / "world_audit.json", {"state": manifest["state"], "error_type": type(exc).__name__})

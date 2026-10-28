@@ -1,2 +1,2 @@
-"""Local, evidence-first story and character workbench (standard library only)."""
-VERSION = "2.1.0"
+"""Current story/world/perspective workbench."""
+VERSION = "3.0.0"

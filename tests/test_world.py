@@ -41,7 +41,7 @@ def extracted(chunk):
                     'actors': ['c'], 'world_entities': ['p', 'o'], 'evidence_ids': evidence('知らせ')}],
         'claims': [{'subject': 'c', 'object': None, 'kind': 'goal', 'predicate': 'plans',
                     'value': '知らせに応じて計画を改める', 'epistemic': 'inferred', 'evidence_ids': evidence('知らせ')}],
-        'links': [],
+        'links': [], 'perspectives': [],
         'world_entities': [{'id': i, 'name': n, 'entity_type': t, 'identity': 'explicit', 'aliases': [],
                              'evidence_ids': evidence(n)} for i, n, t in worlds],
         'world_claims': [
@@ -234,7 +234,7 @@ class WorldWritingTests(WorldFixture):
         context, plan, claim = self.ready()
         result = validate_plan(plan, context)
         self.assertEqual(result['world_claim_ids'], [claim])
-        self.assertEqual(context['schema'], 'pastiche.writer.context.v3')
+        self.assertEqual(context['schema'], 'pastiche.writer.context.v4')
         self.assertTrue((self.out/'world_bible.md').exists())
         self.assertTrue(context['warnings'])
         bad = copy.deepcopy(plan); bad['world_claim_ids']=['BAD']
