@@ -8,7 +8,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / 'skills/pastiche-profile/scripts
 sys.path.insert(0, str(SCRIPTS))
 from story_workbench.store import Store, segments
 from story_workbench.server import make_server
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, expect
 
 
 def main():
@@ -41,16 +41,18 @@ def main():
                 page.wait_for_selector('#inspector mark')
                 assert '🌅ミナ' in page.locator('#inspector mark').first.inner_text()
                 page.get_by_role('button', name='承認', exact=True).click()
-                page.wait_for_function("document.getElementById('message').textContent.includes('判断を履歴')")
+                # Locator assertions work with script-src 'self'. Do not relax
+                # the application's CSP merely to evaluate polling strings.
+                expect(page.locator('#message')).to_contain_text('判断を履歴')
                 page.select_option('#scope', 'demo:original')
                 page.get_by_role('button', name='承認済みを出力', exact=True).click()
-                page.wait_for_function("document.getElementById('message').textContent.includes('writer_context.json')")
+                expect(page.locator('#message')).to_contain_text('writer_context.json')
                 assert (out / 'writer_context.json').is_file()
                 store = Store(out / 'character_graph.sqlite3')
                 assert store.claim(claim)['status'] == 'human_approved'
                 store.close()
                 page.get_by_role('button', name='物語構造', exact=True).click()
-                page.wait_for_function("document.getElementById('storyContent').textContent.includes('物語分析はまだありません')")
+                expect(page.locator('#storyContent')).to_contain_text('物語分析はまだありません')
                 page.get_by_role('button', name='人物グラフ', exact=True).click()
                 page.set_viewport_size({'width': 640, 'height': 900})
                 assert page.locator('#graph').is_visible()
