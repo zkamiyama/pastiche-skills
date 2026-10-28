@@ -15,7 +15,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from narrative import LocalModel, CheckpointStore, ProgressReporter, ModelRequestError, atomic_json_write
+from narrative import LocalModel, CheckpointStore, ProgressReporter, ModelRequestError, atomic_json_write, model_jobs
 
 SCHEMA = 'pastiche.lexical.judgments.v1'
 VERSION = '0.1.0'
@@ -116,7 +116,7 @@ def make_guide(judgments:dict[str,Any])->str:
 
 
 def assess(candidate_file:Path,out:Path,model:Any,*,batch_size:int=24,retries:int=2,
-           progress_interval:float=15.0,restart:bool=False)->dict[str,Any]:
+           progress_interval:float=15.0,restart:bool=False,llm_workers:int=1)->dict[str,Any]:
     obj=json.loads(candidate_file.read_text(encoding='utf-8'))
     if obj.get('schema')!='pastiche.lexical.candidates.v2' or not isinstance(obj.get('candidates'),list):
         raise ValueError('expected lexical_candidates.json schema v2')
@@ -128,45 +128,66 @@ def assess(candidate_file:Path,out:Path,model:Any,*,batch_size:int=24,retries:in
             raise ValueError('invalid lexical candidate')
     if not 1<=batch_size<=48:
         raise ValueError('--batch-size must be 1..48')
+    if llm_workers<1:
+        raise ValueError('--llm-workers must be >= 1')
     batches=[items[i:i+batch_size] for i in range(0,len(items),batch_size)]
     out.mkdir(parents=True,exist_ok=True)
     checkpoint=CheckpointStore(out/'lexical_review_checkpoint.sqlite3',reset=restart)
     reporter=ProgressReporter(out,interval=progress_interval)
-    collected=[]
+    assessed_by_batch:dict[int,list[dict[str,Any]]]={}
+    pending=[]
     actual_calls=0
     cached=0
     try:
+        reporter.status(state='running',stage='LEXICAL_REVIEW',
+                        total_batches=len(batches),completed_batches=0,classified=0)
         for batch_no,rows in enumerate(batches,1):
             fp=batch_fingerprint(rows,model)
             key=f'lexical:{fp}'
             entry=checkpoint.get(key)
             if isinstance(entry,dict) and isinstance(entry.get('assessments'),list):
                 clean=validate_judgments({'assessments':entry['assessments']}, rows)
-                cached+=1
-                reporter.log(f'lexical review cache {batch_no}/{len(batches)}')
-            else:
-                reporter.status(state='running',stage='LEXICAL_REVIEW',
-                                total_batches=len(batches),current_batch=batch_no,
-                                completed_batches=batch_no-1)
-                reply=reporter.call(model,review_prompt(rows),
-                                    f'LEXICAL REVIEW {batch_no}/{len(batches)}',retries=retries)
-                clean=validate_judgments(reply,rows)
-                if not clean:
-                    # Do not checkpoint an invalid/empty response as a successful
-                    # assessment. A future run can retry this one batch.
-                    raise ModelRequestError('no usable lexical labels returned; batch can be retried')
-                actual_calls+=1
-                # Store only closed-class labels and IDs, no free model output.
-                checkpoint.put(key,{'assessments':clean})
+                if clean:
+                    assessed_by_batch[batch_no]=clean
+                    cached+=1
+                    reporter.log(f'lexical review cache {batch_no}/{len(batches)}')
+                    continue
+            pending.append((batch_no,rows,key))
+
+        reporter.status(completed_batches=cached,
+                        classified=sum(len(v) for v in assessed_by_batch.values()))
+
+        def review_one(job:Any, worker_model:Any)->list[dict[str,Any]]:
+            batch_no,rows,_key=job
+            reply=reporter.call(worker_model,review_prompt(rows),
+                                f'LEXICAL REVIEW {batch_no}/{len(batches)}',
+                                retries=retries,record_status=llm_workers==1)
+            clean=validate_judgments(reply,rows)
+            if not clean:
+                # Never cache an invalid or empty response; allow retry on next run.
+                raise ModelRequestError('no usable lexical labels returned; batch can be retried')
+            return clean
+
+        for (batch_no,rows,key),clean in model_jobs(pending,model,llm_workers,review_one):
+            # A single thread owns all writes to the SQLite checkpoint.
+            checkpoint.put(key,{'assessments':clean})
+            assessed_by_batch[batch_no]=clean
+            actual_calls+=1
+            reporter.status(stage='LEXICAL_REVIEW',
+                            completed_batches=len(assessed_by_batch),
+                            classified=sum(len(v) for v in assessed_by_batch.values()))
+
+        # Completion order is non-deterministic; preserve the original batch order.
+        collected=[]
+        for batch_no,rows in enumerate(batches,1):
             by_id={r['id']:r for r in rows}
-            for item in clean:
+            for item in assessed_by_batch[batch_no]:
                 entry=by_id[item['id']]
                 value={k:entry[k] for k in ('id','kind','form','count','work_count')}
                 value.update(item)
                 value['style_signal']=style_signal(value)
                 collected.append(value)
-            reporter.status(state='running',stage='LEXICAL_REVIEW',completed_batches=batch_no,
-                            total_batches=len(batches),classified=len(collected))
+
         result={'schema':SCHEMA,'method':'model intuitive general-language judgment of short forms',
                 'assessments':collected,'candidate_count':len(items),
                 'reviewed_count':len(collected),'uncertain_count':sum(x['typicality']=='uncertain' for x in collected),
@@ -201,6 +222,7 @@ def main(argv:list[str]|None=None)->int:
     ap.add_argument('--no-stream',action='store_true')
     ap.add_argument('--timeout',type=int,default=0)
     ap.add_argument('--batch-size',type=int,default=24)
+    ap.add_argument('--llm-workers',type=int,default=1,help='concurrent model requests (default: 1)')
     ap.add_argument('--retries',type=int,default=2)
     ap.add_argument('--progress-interval',type=float,default=15)
     ap.add_argument('--restart',action='store_true')
@@ -211,7 +233,7 @@ def main(argv:list[str]|None=None)->int:
                          not args.no_stream)
         obj=assess(args.candidates,args.out,model,batch_size=args.batch_size,
                    retries=args.retries,progress_interval=args.progress_interval,
-                   restart=args.restart)
+                   restart=args.restart,llm_workers=args.llm_workers)
         print(json.dumps({'candidates':obj['candidate_count'],'reviewed':obj['reviewed_count'],
                           'model_calls':obj['actual_model_calls_this_run']},ensure_ascii=False))
         return 0

@@ -7,6 +7,8 @@ progress snapshots and final profiles contain IDs, counts and finite labels only
 from __future__ import annotations
 
 import argparse
+import copy
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 import hashlib
 import ipaddress
@@ -23,7 +25,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Callable
+from typing import Any, Callable, Iterable, Iterator
 
 # Existing standard-library-only profiler is intentionally reused for input validation.
 from pastiche import input_files, read_text
@@ -273,6 +275,18 @@ class LocalModel:
             if parsed.scheme != "https" and not _endpoint_scope(parsed.hostname or "")[0]:
                 raise ValueError("sending an API key to a non-loopback endpoint requires HTTPS")
 
+    def worker_copy(self) -> "LocalModel":
+        """Give each concurrent request its own stream callback and HTTP opener.
+
+        A shallow copy retains subclass settings (e.g. output token limits).
+        The model configuration is read-only while requests are running.
+        """
+        client = copy.copy(self)
+        client.on_chunk = None
+        client.opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), NoRedirect())
+        return client
+
     def _request_body(self, prompt: str) -> dict[str, Any]:
         if self.backend == "ollama":
             return {"model": self.model, "prompt": prompt, "stream": self.stream,
@@ -398,7 +412,7 @@ class ProgressReporter:
             atomic_json_write(self.out / "narrative_progress.json", self.state)
 
     def call(self, model: Any, prompt: str, label: str, *, retries: int = 0,
-             retry_delay: float = 2.0) -> dict[str, Any]:
+             retry_delay: float = 2.0, record_status: bool = True) -> dict[str, Any]:
         for attempt in range(retries + 1):
             stop = threading.Event()
             counter = [0, 0]
@@ -409,13 +423,15 @@ class ProgressReporter:
             if hasattr(model, "on_chunk"):
                 model.on_chunk = count_chunk
             started = time.monotonic()
-            self.status(stage=label, attempt=attempt + 1, response_events=0, response_characters=0)
+            if record_status:
+                self.status(stage=label, attempt=attempt + 1, response_events=0, response_characters=0)
             self.log(f"start {label} (attempt {attempt+1}/{retries+1})")
 
             def heartbeat() -> None:
                 while not stop.wait(self.interval):
                     elapsed = int(time.monotonic() - started)
-                    self.status(response_events=counter[0], response_characters=counter[1])
+                    if record_status:
+                        self.status(response_events=counter[0], response_characters=counter[1])
                     self.log(f"waiting {label}: {elapsed}s, stream_events={counter[0]}, output_chars={counter[1]}")
             thread = threading.Thread(target=heartbeat, daemon=True)
             if self.interval > 0:
@@ -440,6 +456,59 @@ class ProgressReporter:
                 self.log(f"retrying {label} after {delay:g}s")
                 time.sleep(delay)
         raise AssertionError("unreachable")
+
+
+def model_jobs(jobs: Iterable[Any], model: Any, workers: int,
+               task: Callable[[Any, Any], Any]) -> Iterator[tuple[Any, Any]]:
+    """Run independent model tasks with bounded concurrency.
+
+    Yield (job, result) as requests finish. The caller owns all SQLite writes,
+    progress snapshots and deterministic output ordering. Each worker thread
+    uses a separate LocalModel client so streaming callbacks cannot collide.
+    No more than 'workers' jobs are submitted at once.
+    """
+    if workers < 1:
+        raise ValueError("--llm-workers must be >= 1")
+    if workers == 1:
+        for job in jobs:
+            yield job, task(job, model)
+        return
+
+    local = threading.local()
+
+    def invoke(job: Any) -> Any:
+        if not hasattr(local, "model"):
+            factory = getattr(model, "worker_copy", None)
+            local.model = factory() if callable(factory) else model
+        return task(job, local.model)
+
+    iterator = iter(jobs)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        pending = {}
+
+        def submit_next() -> bool:
+            try:
+                job = next(iterator)
+            except StopIteration:
+                return False
+            pending[executor.submit(invoke, job)] = job
+            return True
+
+        for _ in range(workers):
+            if not submit_next():
+                break
+        try:
+            while pending:
+                done, _ = wait(tuple(pending), return_when=FIRST_COMPLETED)
+                for future in done:
+                    job = pending.pop(future)
+                    result = future.result()
+                    yield job, result
+                    submit_next()
+        except BaseException:
+            for future in pending:
+                future.cancel()
+            raise
 
 
 def atomic_json_write(path: Path, data: Any) -> None:

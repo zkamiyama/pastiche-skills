@@ -170,7 +170,9 @@ def valid_confirmation(raw:dict[str,Any],candidate:dict[str,Any],ids:set[str])->
 
 def analyze(corpus:Path,out:Path,model:Any,*,max_works:int=18,chunks_per_work:int=2,
             chunk_chars:int=3800,min_works:int=2,max_rules:int=12,max_verification_groups:int=8,
-            retries:int=2,progress_interval:float=15.0,restart:bool=False)->dict[str,Any]:
+            retries:int=2,progress_interval:float=15.0,restart:bool=False,llm_workers:int=1)->dict[str,Any]:
+    if llm_workers<1:
+        raise ValueError('--llm-workers must be >= 1')
     all_works=narrative.enumerated_corpus(corpus,80)
     if len(all_works)<1:
         raise ValueError("no qualifying corpus")
@@ -195,31 +197,54 @@ def analyze(corpus:Path,out:Path,model:Any,*,max_works:int=18,chunks_per_work:in
     model_calls=0
     resumed=0
     try:
+        # Read checkpoints on the main thread; only uncached requests are submitted.
+        extracted={}
+        pending_extract=[]
         for i,(work_id,pos,n,chunk) in enumerate(jobs,1):
             fp=fingerprint(chunk,model)
             key=f"extract:{work_id}:{pos}:{fp}"
             entry=store.get(key)
             if len(chunk)<2:
-                proposals=[]
+                extracted[(work_id,pos)]=[]
                 resumed+=1
                 reporter.log(f"skip {i}/{len(jobs)} {work_id}: fewer than two evidence segments")
             elif isinstance(entry,dict) and isinstance(entry.get("patterns"),list):
-                proposals=clean_patterns({"patterns":entry["patterns"]},chunk)
+                extracted[(work_id,pos)]=clean_patterns({"patterns":entry["patterns"]},chunk)
                 resumed+=1
                 reporter.log(f"restored {i}/{len(jobs)} {work_id} chunk {pos}/{n}")
             else:
-                reporter.status(stage="EXTRACT",current_work=work_id,current_chunk=pos,chunk_index=i)
-                raw=reporter.call(model,discover_prompt(work_id,chunk),f"{work_id} chunk {pos}/{n} DISCOVER",retries=retries)
-                model_calls+=1
-                proposals=clean_patterns(raw,chunk)
-                store.put(key,{"patterns":proposals})
-            for p in proposals:
+                pending_extract.append((i,work_id,pos,n,chunk,key))
+        reporter.status(stage="EXTRACT",completed_chunks=len(extracted))
+
+        def extract_one(job:Any, worker_model:Any)->list[dict[str,Any]]:
+            i,work_id,pos,n,chunk,_key=job
+            raw=reporter.call(worker_model,discover_prompt(work_id,chunk),
+                              f"{work_id} chunk {pos}/{n} DISCOVER",
+                              retries=retries,record_status=llm_workers==1)
+            return clean_patterns(raw,chunk)
+
+        for (i,work_id,pos,n,chunk,key),proposals in narrative.model_jobs(
+                pending_extract,model,llm_workers,extract_one):
+            # All SQLite writes and progress snapshots stay on the main thread.
+            store.put(key,{"patterns":proposals})
+            extracted[(work_id,pos)]=proposals
+            model_calls+=1
+            reporter.status(stage="EXTRACT",completed_chunks=len(extracted),
+                            current_work=work_id,current_chunk=pos,chunk_index=i)
+            reporter.log(f"extracted {len(extracted)}/{len(jobs)} selected chunks")
+
+        # Restore source ordering before grouping; completion order must not change rules.
+        for i,(work_id,pos,n,chunk) in enumerate(jobs,1):
+            for p in extracted[(work_id,pos)]:
                 found.append(p|{"work_id":work_id,"chunk_index":pos})
-            reporter.status(stage="extracted",completed_chunks=i)
-            reporter.log(f"progress {i}/{len(jobs)} selected chunks, hypotheses={len(found)}")
+        reporter.status(stage="extracted",completed_chunks=len(jobs))
+        reporter.log(f"extracted {len(jobs)} chunks, hypotheses={len(found)}")
+
         groups=group_candidates(found)
         candidates=[g for g in groups if len({r["work_id"] for r in g})>=min_works]
-        accepted=[]
+        selected_groups=[]
+        checks_by_group=[]
+        pending_verify=[]
         for group in candidates[:max_verification_groups]:
             selected_instances=[]
             seen=set()
@@ -229,7 +254,9 @@ def analyze(corpus:Path,out:Path,model:Any,*,max_works:int=18,chunks_per_work:in
                     seen.add(item["work_id"])
                 if len(selected_instances)>=min_works:
                     break
-            checks=[]
+            group_index=len(selected_groups)
+            selected_groups.append((group,selected_instances))
+            checks_by_group.append([])
             for item in selected_instances:
                 chunk=chunks_by_key[(item["work_id"],item["chunk_index"])]
                 fp=fingerprint(chunk,model)
@@ -237,14 +264,30 @@ def analyze(corpus:Path,out:Path,model:Any,*,max_works:int=18,chunks_per_work:in
                 key=f"confirm:{fp}:{sig}"
                 entry=store.get(key)
                 if isinstance(entry,dict) and "supported" in entry:
-                    supported=bool(entry["supported"])
+                    checks_by_group[group_index].append(bool(entry["supported"]))
                 else:
-                    reporter.status(stage="VERIFY",current_work=item["work_id"],current_chunk=item["chunk_index"])
-                    raw=reporter.call(model,confirm_prompt(chunk,item),f"{item['work_id']} CONFIRM",retries=retries)
-                    model_calls+=1
-                    supported=valid_confirmation(raw,item,{eid for eid,_ in chunk})
-                    store.put(key,{"supported":supported})
-                checks.append(supported)
+                    pending_verify.append((group_index,item,chunk,key))
+        reporter.status(stage="VERIFY",total_verifications=sum(len(items) for _,items in selected_groups),
+                        completed_verifications=sum(len(checks) for checks in checks_by_group))
+
+        def verify_one(job:Any,worker_model:Any)->bool:
+            _group_index,item,chunk,_key=job
+            raw=reporter.call(worker_model,confirm_prompt(chunk,item),
+                              f"{item['work_id']} CONFIRM",
+                              retries=retries,record_status=llm_workers==1)
+            return valid_confirmation(raw,item,{eid for eid,_ in chunk})
+
+        for (group_index,item,chunk,key),supported in narrative.model_jobs(
+                pending_verify,model,llm_workers,verify_one):
+            store.put(key,{"supported":supported})
+            checks_by_group[group_index].append(supported)
+            model_calls+=1
+            reporter.status(stage="VERIFY",current_work=item["work_id"],
+                            current_chunk=item["chunk_index"],
+                            completed_verifications=sum(len(checks) for checks in checks_by_group))
+
+        accepted=[]
+        for (group,selected_instances),checks in zip(selected_groups,checks_by_group):
             if all(checks) and len(checks)>=min_works:
                 accepted.append((group,selected_instances))
         verified_by_group={id(g):verified_instances for g,verified_instances in accepted}
@@ -322,6 +365,7 @@ def main(argv:list[str]|None=None)->int:
     p.add_argument("--timeout",type=int,default=0)
     p.add_argument("--retries",type=int,default=2)
     p.add_argument("--progress-interval",type=float,default=15.)
+    p.add_argument("--llm-workers",type=int,default=1,help="concurrent LLM requests (default: 1)")
     p.add_argument("--chunk-chars",type=int,default=3800)
     p.add_argument("--narrative-works",type=int,default=18,help="sample up to N works evenly across corpus; 0=all")
     p.add_argument("--chunks-per-work",type=int,default=2)
@@ -342,7 +386,8 @@ def main(argv:list[str]|None=None)->int:
                       chunks_per_work=args.chunks_per_work,chunk_chars=args.chunk_chars,
                       min_works=args.min_works,max_rules=args.max_rules,
                       max_verification_groups=args.verify_groups,retries=args.retries,
-                      progress_interval=args.progress_interval,restart=args.restart)
+                      progress_interval=args.progress_interval,restart=args.restart,
+                      llm_workers=args.llm_workers)
         print(json.dumps(audit,ensure_ascii=False))
         return 0
     except (OSError,ValueError,TypeError) as exc:

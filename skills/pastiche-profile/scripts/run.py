@@ -96,6 +96,8 @@ def main(argv=None):
                         help="fast=sampled open discovery (default); full=legacy exhaustive; none=local analysis only")
     parser.add_argument("--timeout", type=int, default=0)
     parser.add_argument("--retries", type=int, default=2)
+    parser.add_argument("--llm-workers", type=int, default=1,
+                        help="concurrent LLM requests per stage (default: 1; fast mode and lexical review)")
     parser.add_argument("--chunk-chars", type=int, default=3800)
     parser.add_argument("--max-works", type=int, default=0,help="legacy full mode: maximum works (0 means all)")
     parser.add_argument("--narrative-works", type=int, default=18,help="fast mode: spread sample over up to N works; 0 means all")
@@ -121,6 +123,8 @@ def main(argv=None):
     parser.add_argument("--check", action="store_true", help="synthetic API check only, without reading corpus")
     args = parser.parse_args(argv)
     try:
+        if args.llm_workers < 1:
+            raise ValueError("--llm-workers must be >= 1")
         if args.lexical_review_limit<0 or not 1<=args.lexical_batch_size<=48:
             raise ValueError("--lexical-review-limit >=0 and --lexical-batch-size 1..48 required")
         if args.mode!="none" or args.check:
@@ -143,9 +147,13 @@ def main(argv=None):
                 cli += ["--narrative-works",str(args.narrative_works),
                         "--chunks-per-work",str(args.chunks_per_work),
                         "--verify-groups",str(args.verify_groups),
-                        "--max-output-tokens",str(args.max_output_tokens)]
+                        "--max-output-tokens",str(args.max_output_tokens),
+                        "--llm-workers",str(args.llm_workers)]
             else:
                 cli += ["--max-works",str(args.max_works)]
+                if args.llm_workers>1:
+                    print("[pastiche] Legacy full narrative mode remains sequential; "
+                          "--llm-workers applies to lexical review only in full mode.",flush=True)
             if args.api_key_env:
                 cli += ["--api-key-env", args.api_key_env]
             if args.no_stream:
@@ -188,7 +196,8 @@ def main(argv=None):
                     "--out",str(args.out),"--backend",backend,"--endpoint",endpoint,
                     "--model",name,"--timeout",str(args.timeout),"--retries",str(args.retries),
                     "--progress-interval",str(args.progress_interval),
-                    "--batch-size",str(args.lexical_batch_size),*flags]
+                    "--batch-size",str(args.lexical_batch_size),
+                    "--llm-workers",str(args.llm_workers),*flags]
             if args.api_key_env:
                 review.extend(["--api-key-env",args.api_key_env])
             if args.no_stream:
