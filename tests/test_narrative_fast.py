@@ -101,17 +101,24 @@ class SlowModel(FakeModel):
         self.lock=threading.Lock()
         self.in_flight=0
         self.peak=0
+        self.active_by_phase={'discover':0,'confirm':0}
+        self.peak_by_phase={'discover':0,'confirm':0}
 
     def ask(self,prompt):
+        phase='confirm' if prompt.startswith('TASK=CONFIRM') else 'discover'
         with self.lock:
             self.in_flight+=1
             self.peak=max(self.peak,self.in_flight)
+            self.active_by_phase[phase]+=1
+            self.peak_by_phase[phase]=max(self.peak_by_phase[phase],
+                                         self.active_by_phase[phase])
         try:
             time.sleep(0.02)
             return super().ask(prompt)
         finally:
             with self.lock:
                 self.in_flight-=1
+                self.active_by_phase[phase]-=1
 
 
 class ParallelFastNarrativeTests(FastNarrativeTests):
@@ -126,7 +133,8 @@ class ParallelFastNarrativeTests(FastNarrativeTests):
             self.corpus,self.out,probe,max_works=6,
             chunks_per_work=2,max_verification_groups=2,
             llm_workers=3,retries=0,progress_interval=0)
-        self.assertGreater(probe.peak,1)
+        self.assertGreater(probe.peak_by_phase['discover'],1)
+        self.assertGreater(probe.peak_by_phase['confirm'],1)
         self.assertLessEqual(probe.peak,3)
         self.assertEqual(parallel['actual_llm_calls_this_run'],
                          expected['actual_llm_calls_this_run'])
@@ -140,6 +148,18 @@ class ParallelFastNarrativeTests(FastNarrativeTests):
             llm_workers=4,retries=0,progress_interval=0)
         self.assertEqual(replay['actual_llm_calls_this_run'],0)
         self.assertEqual(replay['restored_extract_chunks'],12)
+
+    def test_worker_copy_separates_stream_state(self):
+        client=narrative_fast.LimitedModel(
+            'openai-compatible','fixture',
+            'http://127.0.0.1:1/v1/chat/completions',
+            max_output_tokens=321)
+        client.on_chunk=lambda n:None
+        copy=client.worker_copy()
+        self.assertIsNot(copy,client)
+        self.assertIsNone(copy.on_chunk)
+        self.assertIsNot(copy.opener,client.opener)
+        self.assertEqual(copy.max_output_tokens,321)
 
     def test_rejects_zero_workers(self):
         with self.assertRaisesRegex(ValueError,'llm-workers'):
