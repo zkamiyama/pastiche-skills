@@ -4,6 +4,41 @@
 
 標準の `--mode llm` は、これまでの文字列類似度だけによるナラティブ分類を使いません。場面単位で語彙・情感・語り口・台詞・感覚・テンポ・物語構造を観察し、LLM が共通技法をグループ化してから、グループの整合性と原文根拠を再検査します。**同じ語彙やテーマの共有だけでは同一技法とみなしません。**
 
+
+## v2: 全文の物語構造と人物グラフ、検証用Webエディタ
+
+標準の `--mode llm` は、従来の文体サンプル分析に加えて、**選択された全作品の全文**をチャンク順に解析します。出来事 → 階層的な展開 → 作品全体のtrajectory → 作品横断の構造候補を作り、人物の口調・価値観・外見・関係を出典付きの未確認グラフへ保存します。
+
+```bash
+# 文体 + 全文構造 + 人物グラフ（同じ指定モデルを利用）
+python3 -u skills/pastiche-profile/scripts/run.py /path/to/corpus \
+  --api-base http://model-server.example/llm/v1 --model el-local \
+  --out /path/to/.pastiche-private/profile --canon-scope work:original --llm-workers 4
+
+# 人間が原文と照らし合わせて検証する（起動時にprivateなURLを表示）
+python3 skills/pastiche-profile/scripts/workbench.py serve \
+  --out /path/to/.pastiche-private/profile
+
+# 原文を使わない、ネットワーク不要のエディタ用デモ
+python3 skills/pastiche-profile/scripts/workbench.py demo --out /tmp/pastiche-demo
+python3 skills/pastiche-profile/scripts/workbench.py serve --out /tmp/pastiche-demo
+```
+
+**追加のtorch/ONNX/Neo4j/Node.jsは不要**。SQLiteとPython標準ライブラリ、同梱SVG Web UIで動作します。全作品の全文解析はLLM呼び出しを増やします。以前の文体分析だけにするには `--skip-story` を指定してください。既存の `fast/full/none` モードは互換用に残します。
+
+人物グラフは線を動かすだけでなく、原文ハイライト、作品版/提示位置フィルタ、承認・訂正・却下・保留、履歴、人物統合/解除、根拠付き手動追加を備えます。承認前に出典のハッシュを検査し、変更された原文の古い承認はwriterへ出力しません。人間の訂正・却下を再解析で消去しません。
+
+追加Skill:
+- `character-research`: ホストのWeb検索と参照リンクを芋づる式に追い、許可ドメイン内で公開資料を取得。公式/考察/別canonを分けた人物主張を作成。
+- `pastiche-graph-review`: ローカルWebエディタで根拠を確認し、承認済みの人物資料を出力。
+- `pastiche-write`: 抽象的な物語構造と承認済み人物制約から階層計画を作り、場面ごとに執筆。計画の知識状態検査と新稿の根拠付きLLMレビューを追加。
+
+新出力は `story_maps.jsonl`、`plot_patterns.json`、`narrative_bible.md`、`character_graph.sqlite3`、`story_audit.json`。承認後は `writer_context.json` と `character_bible.md` を出力します。すべてprivateに保管してください。全文の読解対象カバー率と、モデルの理解精度は別です。特定論文の再現や実コーパスでの品質向上は主張しません。
+
+**使い方・モデル境界・検証とセキュリティ仕様:** [STORY_CHARACTER_WORKBENCH.md](docs/STORY_CHARACTER_WORKBENCH.md)
+
+---
+
 ## クイックスタート
 
 ```bash
@@ -18,10 +53,10 @@ python3 -u skills/pastiche-profile/scripts/run.py "/path/to/corpus" \
 - `~/.pi/agent/models.json` に同一ベース URL のモデルが一つあれば自動選択します。それ以外は `/models` を参照し、複数あれば `--model MODEL_ID` が必要です。
 - リモートに指定したモデルサーバーには、**サンプルした原文チャンクと短い語彙候補を送信します**。HTTP は暗号化されないため、信頼できるネットワークで使ってください。`--api-key-env` は環境変数名を指定します。認証つきリモート接続は HTTPS を使用してください。
 - `--check` は合成 JSON のみで通信テストし、コーパスを読みません。
-- **標準で全ての適格な作品を対象**とし、各作品から最大2チャンクを抽出します。91作品なら最大182チャンクのLLM観察です（630チャンクすべての分析ではありません）。作品数を減らす場合のみ `--analysis-works N` を指定します。
+- **文体分析は全ての適格な作品を対象**とし、各作品から最大2チャンクを抽出します。91作品なら最大182チャンクの文体観察です。追加の物語・人物経路は全630チャンクを読解対象にします。作品数を減らす場合のみ `--analysis-works N` を指定します。
 - 初回のみ必要なら `fugashi-plus[unidic-lite]` を専用キャッシュ venv に導入します。`npx skills add` 自体にインストールフックはありません。導入できない場合は `--no-auto-install --morphology none` で全文語彙一覧なしの縮退運転ができます。
 
-## アーキテクチャ
+## 文体分析側のアーキテクチャ（全文の物語経路は上記仕様を参照）
 
 | 工程 | 方法 | 出力・検査 |
 | --- | --- | --- |

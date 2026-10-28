@@ -41,11 +41,23 @@ python3 -u scripts/run.py "/path/to/corpus" \
 7. LLMが検証済み規則だけを要約し、引用先パターンIDが存在するかをPythonが検査する。`qualitative_summary.json` を保存する。
 8. `qualitative_bible.md`、`narrative_rules.json` と決定論的な文体統計を `style_bible.md` に統合する。短い原形語彙は非公開の成果物として扱う。
 
+## 全文の構造・人物分析（既定で追加実行）
+
+上の場面サンプルは文体・情感の分析用。標準の `--mode llm` は別に**全選択作品の全チャンク**を読み、出来事・人物・状態変化を抽出し、順序を保った階層構造と作品横断の構造候補を作る。`--chunks-per-work` はこの全文経路を制限しない。`--analysis-works 0` が既定で全作品。文体だけでよい場合は `--skip-story` を明示する。
+
+- 名前・口調・容姿・価値観・信念・関係は `character_graph.sqlite3` の出典付き主張に記録し、最初はすべて未確認。
+- 物語の提示順と出来事の時刻を区別。部分要約を全体構造と称さず、各階層で全子ノードの保持を検査する。
+- `story_maps.jsonl`、`plot_patterns.json`、`narrative_bible.md` と `story_audit.json` を生成。構造候補の支持数は完全な出現率ではない。
+- `--canon-scope work:original` 等で作品版を分離する。名前が同じというだけで別ファイルの人物を統合しない。
+- privateな人物名と短い要約を保存するため、これらの新出力も公開しない。原文の長い引用は保存しないが、元ファイルの登録先をDBに保持する。
+- `pastiche-graph-review` により人間が根拠を確認し、承認済みの人物情報だけを `writer_context.json` へ出力する。
+- Web調査は `character-research` で別途明示して実行。コーパス解析から自動でWebへ検索しない。
+
 ## 生成物と検査
 
 主な生成物：`style_profile.json`、`lexical_profile.json`、`lexical_inventory.jsonl`（辞書あり）、`qualitative_observations.json`、`qualitative_patterns.json`、`qualitative_summary.json`、`qualitative_bible.md`、`narrative_rules.json`、`style_llm_audit.json`、`narrative_audit.json`、`style_bible.md`。
 
-- `narrative_progress.json` が `state=completed` であること。失敗・未完了なら分析終了と宣言しない。
+- `narrative_progress.json` が `state=completed` であること。全文経路を使用した場合は `story_audit.json` と `story_progress.json` も `completed` で、`scanned_chunks=full_chunks` を確認する。失敗・未完了なら分析終了と宣言しない。
 - `style_llm_audit.json` の `discovered_observations`、`cross_work_candidate_groups`、`reviewed_groups`、`verified_groups` を確認。すべて0のときは抽出失敗・分類未成立・根拠棄却のどこが問題か分けて説明する。
 - `model_supported` は人間の検証や作者固有性を意味しない。サンプリング対象の偏り、長距離依存、同一シリーズ非独立性を明記する。
 - `--analysis-works 0` が既定で全ての適格なTXT作品を対象とする。ただし全文ではなく各作品から最大2チャンクだけを観察する。費用や負荷を抑えるには `--analysis-works N`（正の整数）で作品数を制限する。
@@ -58,3 +70,5 @@ python3 -u scripts/run.py "/path/to/corpus" \
 `pastiche-write` は `style_bible.md` の統計を柔らかい目標とし、`model_supported` の質的・ナラティブ特徴から題材に合うものを選ぶ。元作品の人物・台詞・独特な文章連続・筋書きを再利用しない。再現性は別途ブラインド比較で評価する。
 
 技術仕様：`references/LLM_STYLE_METHOD.md`。旧方式の背景：`references/NARRATIVE_METHOD.md`。合成テスト：`python3 -m unittest discover -s tests -v`。
+
+全文経路・グラフ・研究と執筆の仕様はリポジトリの `docs/STORY_CHARACTER_WORKBENCH.md`。これは複数の一般的設計原理を組み合わせた独自実装で、特定論文やベンチマークの再現を主張しない。

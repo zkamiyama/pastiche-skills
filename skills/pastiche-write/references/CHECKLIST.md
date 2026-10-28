@@ -22,3 +22,13 @@ For long texts, outline → scene blocks with state notes → continuity revisio
 ## Privacy
 
 Use only generated profile artifacts, not the original corpus. `lexical_inventory.jsonl` should not be pasted into an LLM prompt. The offline audit reads a **new draft and profile** without network calls or source corpus access. Review private artifacts before uploading them to any hosted model or public repository.
+
+## Full-story / character checks (v2)
+
+- Is the selected structure a corpus-level abstract pattern rather than one original work's event sequence?
+- Does every scene belong exactly once to a plot-tree leaf and have valid prior dependencies?
+- Are character and reader knowledge separate, with no use before acquisition?
+- Are original/canon modes explicit, with canon scope and presentation cutoff fixed?
+- Are character constraints current human-approved claims, never pending model inferences or stale source versions?
+- Are conditional voice, audience, reported speech, belief and fact distinguished?
+- Did structural revision happen before surface imitation? Does a source-cited LLM draft audit remain clearly a model judgment?
