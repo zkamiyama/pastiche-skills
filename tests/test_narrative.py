@@ -378,7 +378,7 @@ class ProtocolTests(unittest.TestCase):
             out = root / 'output'
             # A check must not try to read the missing corpus folder.
             self.assertEqual(run.main([str(root / 'missing'), '--api-base', base, '--check']), 0)
-            cmd = [str(corpus), '--api-base', base, '--out', str(out), '--progress-interval', '0']
+            cmd = [str(corpus), '--api-base', base, '--out', str(out), '--mode', 'fast', '--progress-interval', '0']
             self.assertEqual(run.main(cmd), 0)
             for name in ('style_profile.json', 'narrative_rules.json', 'style_bible.md',
                          'narrative_fast_checkpoint.sqlite3', 'narrative_progress.json',

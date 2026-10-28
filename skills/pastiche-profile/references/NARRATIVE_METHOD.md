@@ -1,6 +1,8 @@
 # Narrative Rule Induction (指定モデルによる物語規則の自動抽出)
 
-この参照文書は `pastiche-profile` の **義務的な実行手順**。人が原文を読んで `narrative_rules.json` を記入する工程を、指定したLLMサーバーによる根拠付き分析で置き換える。学術論文のアルゴリズムの完全な再現ではなく、表現形式やエラー管理の考え方を組み合わせた実装である。
+**注意：この文書は旧 `--mode full` の方式を説明しています。既定の `--mode llm` は [`LLM_STYLE_METHOD.md`](LLM_STYLE_METHOD.md) に従ってください。**
+
+この参照文書は従来の `pastiche-profile --mode full` の設計資料です。人が原文を読んで `narrative_rules.json` を記入する工程を、指定したLLMサーバーによる根拠付き分析で置き換える。学術論文のアルゴリズムの完全な再現ではなく、表現形式やエラー管理の考え方を組み合わせた実装である。
 
 ## 何を規則と呼ぶか
 
