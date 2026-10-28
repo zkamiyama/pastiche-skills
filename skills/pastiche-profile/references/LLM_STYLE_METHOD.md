@@ -15,7 +15,8 @@ The output must not be interpreted as proof of author identity, unique authorial
 
 `narrative.enumerated_corpus` assigns anonymous work IDs. `narrative.chunk_segments` creates bounded chunks with segment IDs. `narrative_fast.stratified_indices` distributes sampling over the *sorted* eligible works; `select_chunks` samples different portions of each selected work.
 
-- Default: up to **30 works × 2 passages** (60 scene requests). It does **not** analyze all 91 works just because the corpus contains 91 files.
+- Default: **all eligible works × up to 2 passages per work** (`--analysis-works 0`). For example, 91 eligible works yield up to 182 scene requests, rather than analyzing all 630 source chunks. This intentionally samples *every work* but not *every passage*.
+- To reduce LLM requests, specify a positive `--analysis-works N` limit. This caps the number of works sampled, not the number of passages in each selected work.
 - Every request sends only the selected passage plus a constrained, schema-specific analysis prompt to the configured model endpoint.
 - Prompt returns at most seven records with `dimension`, `trigger`, `technique`, `effect`, at least two actual `evidence_ids`, and zero to two optional short `anchors` only for lexicon.
 - Python rejects unsupported dimensions, fabricated IDs, prose with long source-matching fragments, malformed JSON, ungrounded lexical anchors and nonsensical field lengths.

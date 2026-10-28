@@ -438,7 +438,7 @@ def qualitative_guide(patterns: list[dict[str, Any]], *,
 
 
 def analyze(corpus: Path, out: Path, model: Any, *,
-            analysis_works: int = 30, chunks_per_work: int = 2,
+            analysis_works: int = 0, chunks_per_work: int = 2,
             chunk_chars: int = 3800, minimum_works: int = 2,
             max_groups: int = 16, verify_works: int = 4,
             cluster_batch_size: int = 30, cluster_rounds: int = 3,
@@ -568,7 +568,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--llm-workers", type=int, default=1)
     p.add_argument("--progress-interval", type=float, default=15.0)
     p.add_argument("--chunk-chars", type=int, default=3800)
-    p.add_argument("--analysis-works", type=int, default=30)
+    p.add_argument("--analysis-works", type=int, default=0,
+                   help="0: all eligible works (default); positive N: limit works")
     p.add_argument("--chunks-per-work", type=int, default=2)
     p.add_argument("--cluster-batch-size", type=int, default=30)
     p.add_argument("--cluster-rounds", type=int, default=3)
