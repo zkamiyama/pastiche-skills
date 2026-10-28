@@ -38,11 +38,12 @@ python3 -u scripts/run.py "/path/to/corpus" \
 4. LLMで同じ表現上の**操作**を指す候補を意味的にグループ化。情感・語彙・題材が似ているだけの別技法は統合しない。`--cluster-batch-size` と `--cluster-rounds` で長い候補一覧を段階的に扱う。
 5. 複数作品に現れた候補だけグループ整合性を再判定し、さらに元チャンクと証拠IDをLLMで再確認する。出力IDの捏造・重複・原文の長い転記をPythonで棄却する。
 6. 2作品以上の原文が再検証を通った規則を `model_supported`、それ以外を `hypothesis` とし、**採用ガイドには検証済みの前者だけを取り込む**。
-7. `qualitative_bible.md`、`narrative_rules.json` と決定論的な文体統計を `style_bible.md` に統合する。短い原形語彙は非公開の成果物として扱う。
+7. LLMが検証済み規則だけを要約し、引用先パターンIDが存在するかをPythonが検査する。`qualitative_summary.json` を保存する。
+8. `qualitative_bible.md`、`narrative_rules.json` と決定論的な文体統計を `style_bible.md` に統合する。短い原形語彙は非公開の成果物として扱う。
 
 ## 生成物と検査
 
-主な生成物：`style_profile.json`、`lexical_profile.json`、`lexical_inventory.jsonl`（辞書あり）、`qualitative_observations.json`、`qualitative_patterns.json`、`qualitative_bible.md`、`narrative_rules.json`、`style_llm_audit.json`、`narrative_audit.json`、`style_bible.md`。
+主な生成物：`style_profile.json`、`lexical_profile.json`、`lexical_inventory.jsonl`（辞書あり）、`qualitative_observations.json`、`qualitative_patterns.json`、`qualitative_summary.json`、`qualitative_bible.md`、`narrative_rules.json`、`style_llm_audit.json`、`narrative_audit.json`、`style_bible.md`。
 
 - `narrative_progress.json` が `state=completed` であること。失敗・未完了なら分析終了と宣言しない。
 - `style_llm_audit.json` の `discovered_observations`、`cross_work_candidate_groups`、`reviewed_groups`、`verified_groups` を確認。すべて0のときは抽出失敗・分類未成立・根拠棄却のどこが問題か分けて説明する。
