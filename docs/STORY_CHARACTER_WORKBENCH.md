@@ -92,17 +92,19 @@ merge/unmerge, saved layouts and export. The story tab shows work trajectories,
 phases, events and their source evidence. Story structure review is currently
 read-oriented; it is not a free-form graphical plot-authoring canvas.
 
-- All automatically extracted character claims start `pending`.
-- `approve` yields `human_approved`; it verifies that the source hashes still match.
-- `correct` creates an override and `needs_review`, **not** immediate approval.
+- New source-grounded character claims start `auto_accepted` and can be used immediately by a writer. This is **not** human verification or established canon. Existing untouched `pending` claims migrate to `auto_accepted`; historical human decisions are preserved.
+- `approve` marks a claim `human_approved` and checks that evidence source hashes still match. `revoke` marks a claim `revoked` and removes it from writing context, without deleting the original; `reject` records a false interpretation, and `defer` temporarily withholds it.
+- `correct` creates a human-authored override and immediately marks it `human_approved` after checking current evidence. No second approval step is required.
 - Reviews require the expected revision; stale tabs receive HTTP 409 instead of
   overwriting another edit. Every review keeps before/after versions and a note.
 - Re-extraction does not erase human overrides, rejection or approval for an
   unchanged claim. Changed evidence is a new claim; old evidence is marked stale.
 - `--restart` clears inference task caches, **never** human decisions.
-- Export includes only current, human-approved character claims in the selected
-  scope/cutoff. Source changes exclude the affected claims even if their historical
-  approval is still visible. Work structure patterns remain separately labelled
+- Export includes current `auto_accepted` and `human_approved` claims in the selected
+  scope/cutoff, with their separate `status` and `epistemic` fields. `revoked`, `rejected`,
+  `needs_review` and stale evidence are excluded. The selected model must treat
+  `auto_accepted` as provisional, not as independently verified canon.
+  Source changes exclude affected claims even if their historical approval is visible. Work structure patterns remain separately labelled
   model-supported, never human-approved.
 
 The UI displays at most 160 character nodes and the first 500 matching queue
@@ -181,7 +183,7 @@ helper is not an autonomous book generator.
 - `plot_patterns.json` / `narrative_bible.md`: grounded abstract structural motifs.
 - `story_audit.json` / `story_progress.json`: coverage, source snapshot and attempts.
 - `character_graph.sqlite3` / `character_graph.json`: private claims and review state.
-- `writer_context.json` / `character_bible.md`: human-reviewed character context.
+- `writer_context.json` / `character_bible.md`: auto-accepted and human-corrected character context (statuses preserved).
 - `writing/story_blueprint.json`, `writing/plan_audit.json`, `writing/plot_audit.json`.
 - `research/sources/`, `research/map.md`, `research/fetch-log.jsonl`, `research/audit.json`.
 
