@@ -19,13 +19,15 @@ python3 -u skills/pastiche-profile/scripts/run.py "/path/to/corpus" \
 - `--check` は合成データのみで接続テストし、コーパスを開きません。
 - 標準モード `fast` は一部の作品・場面から構造を探索するため、従来の全チャンク二重解析よりLLM呼び出しを減らせます。実際の所要時間・作風再現性はモデルと資料に依存します。
 
-### 語彙を完全に抽出したい場合
+### 語彙解析のPython依存関係は初回実行時に自動導入
 
-```bash
-python3 -m pip install 'fugashi[unidic-lite]'
-```
+**手動の `pip install` は不要です。** `npx skills add` はSkillファイルを配置するため、Pythonパッケージを自動実行するインストールフックはありません。代わりに `scripts/run.py` が初めてコーパスを解析するとき、必要なら `fugashi-plus[unidic-lite]` を専用Python仮想環境（ユーザーキャッシュの `~/.cache/pastiche-skills/`）にインストールして、その環境で処理を継続します。既に正常に導入されていればインストールを省略し、2回目以降は環境を再利用します。
 
-その後、通常のコマンドに `--morphology fugashi` を追加してください。形態素解析を明示的に有効にすると、原文の**出現語形すべて**（辞書の解析単位ごと）の作品内頻度・作品数を `lexical_inventory.jsonl` に保存します。ライブラリなしでも記号・顔文字候補・反復・表記揺れの正確な文字列計測は動きますが、全単語一覧は作りません。
+`fugashi-plus` は本家 `fugashi` の互換forkで、`import fugashi` は変わりません。両者は同じPythonパッケージ名を使うため、同じ環境への重複インストールを避け、専用仮想環境に分離します。これは辞書の扱いや環境互換性の改善であり、解析速度の向上を保証するものではありません。
+
+形態素解析により、出現語形すべての頻度・作品数を `lexical_inventory.jsonl` に保存できます。セットアップ中のネットワークアクセスはPythonパッケージの取得用であり、小説本文を送るものではありません。実際のモデル解析時には、指定したモデルサーバーに必要な本文チャンクが送信されます。
+
+パッケージを自動導入できないオフライン環境や、導入を望まない場合は `--no-auto-install --morphology none` で記号・顔文字・反復・表記揺れのみの分析を実行できます。その場合は全語彙一覧を生成しません。依存関係のインストールは最初の一回だけ通信が必要です。
 
 ## パイプライン
 
@@ -47,7 +49,7 @@ python3 -m pip install 'fugashi[unidic-lite]'
 .pastiche-private/profile/
 ├── style_profile.json               # 文長・句読点などの数値
 ├── lexical_profile.json             # 記号、表記揺れ、語彙・連語の分布
-├── lexical_inventory.jsonl          # 辞書による全出現語形（fugashi導入時のみ）
+├── lexical_inventory.jsonl          # 辞書による全出現語形（fugashi-plus導入時のみ）
 ├── lexical_candidates.json          # モデル評価に回す短い表現
 ├── lexical_judgments.json           # LLMの一般的な語感による判定
 ├── lexical_bible.md                 # 実測値だけの書き方ガイド

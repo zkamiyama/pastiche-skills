@@ -144,7 +144,7 @@ def make_tagger(mode: str) -> Any:
         from fugashi import Tagger
         return Tagger()
     except (ImportError, RuntimeError, OSError) as exc:
-        raise ValueError("--morphology fugashi requires `pip install 'fugashi[unidic-lite]'` and a working dictionary") from exc
+        raise ValueError("--morphology fugashi requires `pip install 'fugashi-plus[unidic-lite]'` and a working dictionary") from exc
 
 
 def read_text(path: Path, max_bytes: int = 15_000_000) -> str:
