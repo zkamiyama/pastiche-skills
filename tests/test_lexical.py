@@ -49,6 +49,13 @@ class LexicalTests(unittest.TestCase):
         self.assertEqual(symbols['♡']['contexts']['dialogue'],40)
         self.assertNotIn('fixture_work',json.dumps(profile,ensure_ascii=False))
 
+    def test_metadata_is_not_a_kaomoji(self):
+        sample = ("（user/54483384）（illust/87089555）"
+                  "（https://example.org/path）（よとぎ・よみ）"
+                  "（´・ω・）")
+        faces = lexical.kaomoji(sample)
+        self.assertEqual(list(faces), ["（´・ω・）"])
+
     def test_unicode_forms_not_normalized(self):
         raw='「来たっ！」と「来たッ！」。\n！！と!!。\n♡ ♥ ❤ ♪ ☆'
         (self.corpus/'fixture_work_1.txt').write_text(raw*5,encoding='utf-8')

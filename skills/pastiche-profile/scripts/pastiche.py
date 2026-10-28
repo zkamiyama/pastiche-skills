@@ -411,6 +411,12 @@ def command_guide(args: argparse.Namespace) -> int:
         if len(lex) > 80_000:
             raise ValueError("lexical guide is too large")
         content += "\n---\n\n" + lex
+    if args.qualitative:
+        qualitative = args.qualitative.read_text(encoding="utf-8")
+        if len(qualitative) > 80_000 or not qualitative.startswith(
+                "# Qualitative Style Bible — LLM-assisted (private)"):
+            raise ValueError("invalid or oversized qualitative guide")
+        content += "\n---\n\n" + qualitative
     if args.lexical_review:
         interpretation=args.lexical_review.read_text(encoding="utf-8")
         if len(interpretation)>80_000:
@@ -442,6 +448,7 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--notes", type=Path, required=False)
     g.add_argument("--lexical", type=Path, help="Optional private lexical_bible.md (may contain exact short expressions)")
     g.add_argument("--lexical-review", type=Path, help="Optional model-language-impression lexical_interpretation.md")
+    g.add_argument("--qualitative", type=Path, help="Validated LLM qualitative_bible.md")
     g.add_argument("--out", type=Path, default=Path(".pastiche-private/style_bible.md"))
     args = parser.parse_args(argv)
     try:

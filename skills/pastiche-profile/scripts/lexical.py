@@ -33,7 +33,8 @@ DEFAULT_PAIRS = (
 )
 # Deliberately conservative; arbitrary parenthetical prose is not a kaomoji.
 PARENTHETICAL = re.compile(r"[（(][^\n()（）]{2,32}[)）]")
-FACE_MARKERS = set("ω∀Д▽・＾^´｀¬ಠ◕ツT_T;；>＜≧≦ﾉノ/ヽ∩益ﾟ°˘﹏￣")
+FACE_MARKERS = set("ω∀Д▽＾^´｀¬ಠ◕ツT_T≧≦ﾉノヽ∩益ﾟ°˘﹏￣")
+# A slash or a middle dot alone is insufficient evidence of a kaomoji.
 SENTENCE_END = re.compile(r"[^。！？!?\n]+[。！？!?]+[」』]?|[^。！？!?\n]+$")
 SENTENCE_PUNCT = "。！？!?」』\r\n "
 SYMBOL_SET = set(SYMBOLS)
@@ -137,7 +138,9 @@ def kaomoji(text: str) -> Counter[str]:
     for match in PARENTHETICAL.finditer(text):
         sample = match.group()
         inside = sample[1:-1]
-        if any(c in FACE_MARKERS for c in inside) and not any(c in "\n。！？" for c in inside):
+        if (any(c in FACE_MARKERS for c in inside)
+                and not any(c in "\n。！？" for c in inside)
+                and not re.search(r"(?i)https?://|(?:user|illust|twitter)/", inside)):
             found[sample] += 1
     return found
 
@@ -420,8 +423,9 @@ def interpretation_candidates(profile:dict[str,Any], limit:int=128)->list[dict[s
         insert("kaomoji",row["form"],row["count"],row["work_count"],score=27)
     for row in profile.get("symbols",[])[:10]:
         insert("symbol",row["form"],row["count"],row["work_count"],score=25)
-    for row in profile.get("sentence_endings",[])[:10]:
-        insert("ending",row["form"],row["count"],row["work_count"],score=22)
+    # Bare final four-character tails often cut through words (e.g. 思っ).
+    # Preserve them in the local profile, but do not ask an LLM to classify
+    # these contextless fragments as if they were complete vocabulary.
     for row in profile.get("collocations",[])[:8]:
         insert("collocation",row["form"],row["count"],row["work_count"],score=21)
     token_budget=max(limit-len(candidates),0) if limit else 0

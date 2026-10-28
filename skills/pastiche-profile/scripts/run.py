@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Single-entrypoint corpus profiler: statistics + exact lexical forms + sampled narratives."""
+"""Single-entrypoint LLM-first stylistic profiler with local descriptive measurements."""
 from __future__ import annotations
 import argparse
 import json
@@ -92,17 +92,26 @@ def main(argv=None):
     parser.add_argument("--backend", choices=("auto","ollama","openai-compatible"), default="auto")
     parser.add_argument("--model", default=os.environ.get("PASTICHE_LOCAL_MODEL"))
     parser.add_argument("--out", type=Path, default=Path(".pastiche-private/profile"))
-    parser.add_argument("--mode", choices=("fast","full","none"), default="fast",
-                        help="fast=sampled open discovery (default); full=legacy exhaustive; none=local analysis only")
+    parser.add_argument("--mode", choices=("llm","fast","full","none"), default="llm",
+                        help="llm=grounded style synthesis (default); fast/full=legacy; none=local measurements")
     parser.add_argument("--timeout", type=int, default=0)
     parser.add_argument("--retries", type=int, default=2)
     parser.add_argument("--llm-workers", type=int, default=1,
-                        help="concurrent LLM requests per stage (default: 1; fast mode and lexical review)")
+                        help="maximum simultaneous LLM calls per stage (default 1)")
     parser.add_argument("--chunk-chars", type=int, default=3800)
     parser.add_argument("--max-works", type=int, default=0,help="legacy full mode: maximum works (0 means all)")
-    parser.add_argument("--narrative-works", type=int, default=18,help="fast mode: spread sample over up to N works; 0 means all")
-    parser.add_argument("--chunks-per-work", type=int, default=2,help="fast mode: 2 (default) means two phases per work")
-    parser.add_argument("--verify-groups", type=int, default=8)
+    parser.add_argument("--analysis-works", type=int, default=30,
+                        help="llm mode: sample up to N works; 0 means all (default 30)")
+    parser.add_argument("--narrative-works", type=int, default=18,
+                        help="legacy fast mode: sample up to N works")
+    parser.add_argument("--cluster-batch-size", type=int, default=30,
+                        help="LLM grouping panel size (default 30)")
+    parser.add_argument("--cluster-rounds", type=int, default=3,
+                        help="maximum LLM semantic-grouping rounds (default 3)")
+    parser.add_argument("--verify-works", type=int, default=4,
+                        help="max independent works rechecked per group (default 4)")
+    parser.add_argument("--chunks-per-work", type=int, default=2,help="sampled passages per work (default 2)")
+    parser.add_argument("--verify-groups", type=int, default=16)
     parser.add_argument("--max-output-tokens", type=int, default=0)
     parser.add_argument("--min-works", type=int, default=2)
     parser.add_argument("--progress-interval", type=float, default=15)
@@ -138,12 +147,25 @@ def main(argv=None):
                     flags.append("--allow-insecure-http")
                     print("[pastiche] Note: HTTP is not encrypted; use a trusted network.",file=sys.stderr,flush=True)
                 print("[pastiche] Source chunks will be sent to the selected model server.",file=sys.stderr,flush=True)
-            cli=[sys.executable,"-u",str(HERE/("narrative_fast.py" if args.mode=="fast" else "narrative.py")),
-                 str(args.corpus),"--out",str(args.out),"--backend",backend,"--endpoint",endpoint,
-                 "--model",name,"--timeout",str(args.timeout),"--retries",str(args.retries),
-                 "--chunk-chars",str(args.chunk_chars),"--progress-interval",str(args.progress_interval),
+            stage_script = {"llm": "llm_style.py", "fast": "narrative_fast.py",
+                            "full": "narrative.py", "none": "narrative.py"}[args.mode]
+            cli=[sys.executable,"-u",str(HERE/stage_script),
+                 str(args.corpus),"--out",str(args.out),"--backend",backend,
+                 "--endpoint",endpoint,"--model",name,
+                 "--timeout",str(args.timeout),"--retries",str(args.retries),
+                 "--chunk-chars",str(args.chunk_chars),
+                 "--progress-interval",str(args.progress_interval),
                  "--min-works",str(args.min_works),*flags]
-            if args.mode=="fast":
+            if args.mode=="llm":
+                cli += ["--analysis-works",str(args.analysis_works),
+                        "--chunks-per-work",str(args.chunks_per_work),
+                        "--cluster-batch-size",str(args.cluster_batch_size),
+                        "--cluster-rounds",str(args.cluster_rounds),
+                        "--verify-groups",str(args.verify_groups),
+                        "--verify-works",str(args.verify_works),
+                        "--max-output-tokens",str(args.max_output_tokens),
+                        "--llm-workers",str(args.llm_workers)]
+            elif args.mode=="fast":
                 cli += ["--narrative-works",str(args.narrative_works),
                         "--chunks-per-work",str(args.chunks_per_work),
                         "--verify-groups",str(args.verify_groups),
@@ -152,8 +174,7 @@ def main(argv=None):
             else:
                 cli += ["--max-works",str(args.max_works)]
                 if args.llm_workers>1:
-                    print("[pastiche] Legacy full narrative mode remains sequential; "
-                          "--llm-workers applies to lexical review only in full mode.",flush=True)
+                    print("[pastiche] Legacy full narrative mode is sequential.",flush=True)
             if args.api_key_env:
                 cli += ["--api-key-env", args.api_key_env]
             if args.no_stream:
@@ -212,21 +233,29 @@ def main(argv=None):
         else:
             print("[3/5] Lexical model impressions skipped; all measured typography retained",flush=True)
         if args.mode!="none":
-            print(f"[4/5] Narrative discovery ({args.mode}, resumable)",flush=True)
+            print(f"[4/5] LLM style synthesis ({args.mode}, resumable)",flush=True)
             r=subprocess.run(cli)
             if r.returncode:
                 print("Completed chunks have a checkpoint. Re-run the same command to resume.",file=sys.stderr,flush=True)
                 return r.returncode
         else:
-            print("[4/5] Narrative discovery skipped (local-only mode)",flush=True)
+            print("[4/5] LLM style synthesis skipped (local-only mode)",flush=True)
         print("[5/5] Build combined style guide",flush=True)
         guide=[sys.executable,str(HERE/"pastiche.py"),"guide", "--profile",str(args.out/"style_profile.json"),
                "--notes",str(args.out/"narrative_rules.json"),
                "--lexical",str(args.out/"lexical_bible.md"),
                "--out",str(args.out/"style_bible.md")]
+        if args.mode=="llm":
+            qualitative=args.out/"qualitative_bible.md"
+            if not qualitative.is_file():
+                raise ValueError("LLM synthesis did not produce qualitative_bible.md")
+            guide += ["--qualitative",str(qualitative)]
         if model_review_ok and (args.out/"lexical_interpretation.md").exists():
             guide += ["--lexical-review",str(args.out/"lexical_interpretation.md")]
-        return subprocess.run(guide).returncode
+        code=subprocess.run(guide).returncode
+        if code==0 and args.mode=="llm":
+            print(f"[pastiche] Audit: {args.out / 'style_llm_audit.json'}",flush=True)
+        return code
     except (OSError,ValueError,TypeError) as exc:
         print(f"error: {exc}",file=sys.stderr)
         return 2
