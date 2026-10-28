@@ -46,12 +46,12 @@ python3 -u scripts/run.py "/path/to/corpus" \
 標準の `--mode llm` は、上記とは別に**全選択作品の全チャンク**を読み、出来事・人物・状態変化を抽出する。全イベントを保持し、順序を保った階層構造、作品全体の展開、作品横断の構造候補を作る。`--chunks-per-work` はこの経路を制限しない。文体だけにするには `--skip-story` を明示する。
 
 - 既定 `--analysis-works 0` は全作品。正の整数で対象作品数を減らせるが、選んだ作品の全文は解析対象になる。
-- 人物の名前・口調・容姿・価値観・信念・知識・関係を `character_graph.sqlite3` の出典付き主張に記録する。明示・伝聞・推定を分け、最初はすべて未確認。
+- 人物の名前・口調・容姿・価値観・信念・知識・関係を `character_graph.sqlite3` の出典付き主張に記録する。明示・伝聞・推定を分け、既定では `auto_accepted` として執筆に利用可能。ただし人間の確認済みを意味せず、`explicit`・`reported`・`inferred` を区別する。
 - 提示順と出来事の時刻を区別し、不明な時刻を推測で埋めない。各階層で全子ノードの保持を検査する。
 - `story_maps.jsonl`、`plot_patterns.json`、`narrative_bible.md`、`story_audit.json` を生成。候補の支持数は完全なコーパス出現率ではない。
 - `--canon-scope work:original` 等で作品版を分離。別ファイルの同名人物は自動統合しない。人間が根拠を確認して統合・解除する。
 - 新出力にはprivateな人物名・短いプロット要約・元ファイルの登録先が含まれる。GitHubや公開場所にアップロードしない。
-- `pastiche-graph-review` で承認された現行の人物主張だけを `writer_context.json` へ出力する。訂正・却下の履歴は再解析で消去しない。
+- `pastiche-graph-review` による全件承認は不要。現行出典を持つ `auto_accepted` と `human_approved` の人物主張を `writer_context.json` へ出力し、人間が使用停止・保留・却下したものは除外する。訂正・却下の履歴は再解析で消去しない。
 - Web調査は `character-research` で別途明示して実行。コーパス解析から自動でWeb検索しない。
 
 ## 完了・再開・品質の検査
@@ -65,6 +65,6 @@ python3 -u scripts/run.py "/path/to/corpus" \
 
 ## 執筆への受け渡し
 
-統計・定性的な表現方法・抽象的な構造候補を `style_bible.md` に統合する。`pastiche-write` は新規の人物・題材を既定とし、既存キャラクターを使う場合は利用者の明示指定、作品版、時点、および承認済み人物情報を必要とする。元作品の長い文言や具体的な筋書きの転用を避ける。
+統計・定性的な表現方法・抽象的な構造候補を `style_bible.md` に統合する。`pastiche-write` は新規の人物・題材を既定とし、既存キャラクターを使う場合は利用者の明示指定、作品版、時点、および出典付きで利用可能な人物情報（自動採用は未確認の推定）を参照する。元作品の長い文言や具体的な筋書きの転用を避ける。
 
 全文経路・グラフ・研究・執筆の技術仕様は `docs/STORY_CHARACTER_WORKBENCH.md`。文体経路は `references/LLM_STYLE_METHOD.md`、旧方式は `references/NARRATIVE_METHOD.md`。独自実装であり、特定論文やベンチマークの再現を主張しない。合成テストは `python3 -m unittest discover -s tests -v`。
