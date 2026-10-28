@@ -251,7 +251,7 @@ class Store:
     def add_claim(self, body: dict) -> str:
         value = self._validate_claim(body)
         cid = uid("K", value)
-        self.db.execute("INSERT OR IGNORE INTO claims(id,body,updated) VALUES (?,?,?)", (cid, dump(value), now()))
+        self.db.execute("INSERT OR IGNORE INTO claims(id,body,status,updated) VALUES (?,?,?,?)", (cid, dump(value), "auto_accepted", now()))
         self.db.commit()
         return cid
 
