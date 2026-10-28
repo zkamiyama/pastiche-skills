@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 import re
 import sys
+import threading
+import time
 import tempfile
 import unittest
 
@@ -90,5 +92,57 @@ class FastNarrativeTests(unittest.TestCase):
         audit=narrative_fast.analyze(self.corpus,self.out,good,max_works=2,
                                      chunks_per_work=1,progress_interval=0,retries=0)
         self.assertEqual(audit['selected_chunks'],2)
+
+
+class SlowModel(FakeModel):
+    """Synthetic endpoint with measurable in-flight concurrency."""
+    def __init__(self):
+        super().__init__()
+        self.lock=threading.Lock()
+        self.in_flight=0
+        self.peak=0
+
+    def ask(self,prompt):
+        with self.lock:
+            self.in_flight+=1
+            self.peak=max(self.peak,self.in_flight)
+        try:
+            time.sleep(0.02)
+            return super().ask(prompt)
+        finally:
+            with self.lock:
+                self.in_flight-=1
+
+
+class ParallelFastNarrativeTests(FastNarrativeTests):
+    def test_parallel_matches_serial_output_and_resumes(self):
+        serial_out=self.root/'serial'
+        expected=narrative_fast.analyze(
+            self.corpus,serial_out,FakeModel(),max_works=6,
+            chunks_per_work=2,max_verification_groups=2,
+            retries=0,progress_interval=0)
+        probe=SlowModel()
+        parallel=narrative_fast.analyze(
+            self.corpus,self.out,probe,max_works=6,
+            chunks_per_work=2,max_verification_groups=2,
+            llm_workers=3,retries=0,progress_interval=0)
+        self.assertGreater(probe.peak,1)
+        self.assertLessEqual(probe.peak,3)
+        self.assertEqual(parallel['actual_llm_calls_this_run'],
+                         expected['actual_llm_calls_this_run'])
+        for filename in ('narrative_rules.json','narrative_audit.json'):
+            self.assertEqual((serial_out/filename).read_text(encoding='utf-8'),
+                             (self.out/filename).read_text(encoding='utf-8'))
+
+        replay=narrative_fast.analyze(
+            self.corpus,self.out,FakeModel(),max_works=6,
+            chunks_per_work=2,max_verification_groups=2,
+            llm_workers=4,retries=0,progress_interval=0)
+        self.assertEqual(replay['actual_llm_calls_this_run'],0)
+        self.assertEqual(replay['restored_extract_chunks'],12)
+
+    def test_rejects_zero_workers(self):
+        with self.assertRaisesRegex(ValueError,'llm-workers'):
+            narrative_fast.analyze(self.corpus,self.out,FakeModel(),llm_workers=0)
 
 if __name__=='__main__':unittest.main()
