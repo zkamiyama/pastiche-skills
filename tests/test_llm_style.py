@@ -76,6 +76,17 @@ class FixtureModel:
                 return {"supported": not self.reject_evidence,
                         "basis": "rhetorical",
                         "evidence_ids": evidence[:2]}
+            if prompt.startswith("TASK=STYLE_SYNTHESIZE"):
+                patterns = json.loads(prompt.split("PATTERNS_JSON=", 1)[1])
+                by_dimension = {}
+                for item in patterns:
+                    by_dimension.setdefault(item["dimension"], []).append(item["pattern_id"])
+                return {"sections": [
+                    {"dimension": dimension,
+                     "summary": "繰り返し観測された表現操作の使い分け",
+                     "writing_use": "新しい場面では表現の順序と強弱を選択する",
+                     "pattern_ids": ids}
+                    for dimension, ids in by_dimension.items()]}
             raise AssertionError("unexpected prompt " + prompt[:100])
         finally:
             with self.lock:
@@ -126,6 +137,10 @@ class LlmStyleTests(unittest.TestCase):
         self.assertEqual(audit["supported_by_dimension"]["emotion"], 1)
         self.assertTrue((self.out / "narrative_audit.json").exists())
         self.assertTrue((self.out / "qualitative_bible.md").exists())
+        summary = json.loads((self.out / "qualitative_summary.json").read_text())
+        self.assertEqual(len(summary["sections"]), 3)
+        self.assertIn("LLMによる横断的な作風のまとめ",
+                      (self.out / "qualitative_bible.md").read_text(encoding="utf-8"))
 
         rules = json.loads((self.out / "narrative_rules.json").read_text())["rules"]
         self.assertEqual(rules[0]["status"], "model_supported")
@@ -220,6 +235,16 @@ class ValidationTests(unittest.TestCase):
                 {"O00001", "O00002"})
         with self.assertRaises(ValueError):
             core.cluster_panels([], 1, 0)
+
+    def test_synthesis_cannot_cite_unsupported_patterns(self):
+        patterns = [{"pattern_id": "P0001", "dimension": "emotion",
+                     "status": "model_supported"}]
+        with self.assertRaisesRegex(ValueError, "invalid guidance or evidence IDs"):
+            core.parse_synthesis({"sections": [{
+                "dimension": "emotion",
+                "summary": "繰り返し現れる描写の特徴がある",
+                "writing_use": "新しい文章での使い方を工夫する",
+                "pattern_ids": ["P9999"]}]}, patterns)
 
     def test_no_pyTorch_or_embedding_dependencies(self):
         self.assertNotIn("torch", core.__dict__)
