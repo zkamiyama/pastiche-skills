@@ -34,7 +34,7 @@ python3 -u scripts/run.py "/path/to/corpus" \
 
 1. Pythonで全作品の文長・会話率・句読点・表記・記号・反復・語彙・連語を計測。Unicodeは正規化せず区別する。実測値とモデル推測は混同しない。
 2. LLMで短い語形の**一般的な日本語としての語感**を補助判定（`--no-lexical-review` で省略可）。これは人口頻度や作者独自性の計測ではない。
-3. 作品を層化サンプリングし（`--analysis-works` 既定30、`--chunks-per-work` 既定2）、場面ごとにLLMで最大6件の抽象的な観察を抽出する。領域：`narrative / lexicon / emotion / voice / dialogue / sensory / pacing`。各観察には2件以上の実在セグメントIDが必要。
+3. 作品を層化サンプリングし（`--analysis-works` 既定30、`--chunks-per-work` 既定2）、場面ごとにLLMで最大7件の抽象的な観察を抽出する。領域：`narrative / lexicon / emotion / voice / dialogue / sensory / pacing`。各観察には2件以上の実在セグメントIDが必要。
 4. LLMで同じ表現上の**操作**を指す候補を意味的にグループ化。情感・語彙・題材が似ているだけの別技法は統合しない。`--cluster-batch-size` と `--cluster-rounds` で長い候補一覧を段階的に扱う。
 5. 複数作品に現れた候補だけグループ整合性を再判定し、さらに元チャンクと証拠IDをLLMで再確認する。出力IDの捏造・重複・原文の長い転記をPythonで棄却する。
 6. 2作品以上の原文が再検証を通った規則を `model_supported`、それ以外を `hypothesis` とし、**採用ガイドには検証済みの前者だけを取り込む**。
