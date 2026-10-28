@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import sqlite3
 from typing import Any
+from json_boundary import atomic_json
 
 MAX_SOURCE_BYTES = 16_000_000
 CHARACTER_KINDS = {"appearance", "voice", "value", "goal", "belief", "knowledge", "relationship", "attribute"}
@@ -245,8 +246,17 @@ class Store:
         return eid
 
     def _validate_claim(self, body: dict) -> dict:
+        if not isinstance(body, dict):
+            raise ValueError("claim must be an object")
+        for key in ("subject", "object", "holder", "proposition_subject", "speaker"):
+            value = body.get(key)
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError("claim entity IDs must be nonempty strings or null")
+        for key in ("domain", "epistemic", "modality", "polarity", "stance", "basis"):
+            if key in body and not isinstance(body[key], str):
+                raise ValueError("claim classifications must be strings")
         result = {"subject": text(body.get("subject"), 100), "predicate": text(body.get("predicate"), 80),
-                  "object": body.get("object") or None, "value": text(body.get("value"), 400),
+                  "object": body.get("object"), "value": text(body.get("value"), 400),
                   "kind": text(body.get("kind", "attribute"), 40),
                   "epistemic": body.get("epistemic", "inferred"), "scope": text(body.get("scope"), 160),
                   "observed_at": position(body.get("observed_at")),
@@ -280,7 +290,7 @@ class Store:
                 raise ValueError("perspective holder must be a character/world/reader")
             if not prop or prop != result["object"] or result["subject"] != (prop if holder in RESERVED else holder):
                 raise ValueError("perspective endpoints and holder do not agree")
-            if speaker is not None and entity_type(self.get("entities", speaker)) != "character":
+            if speaker is not None and (speaker in RESERVED or entity_type(self.get("entities", speaker)) != "character"):
                 raise ValueError("speaker must be a character")
             if body.get("stance") not in {"affirmed", "denied", "uncertain"} or body.get("basis") not in BASES:
                 raise ValueError("invalid perspective stance or acquisition basis")
@@ -424,11 +434,11 @@ class Store:
                         raise ValueError("invalid coordinate")
                 self.db.execute("INSERT OR REPLACE INTO layout VALUES (?,?,?)", (eid, p["x"], p["y"]))
 
-    def _context(self, scope: str, cutoff: float, domain: str) -> dict:
+    def _context(self, scope: str, cutoff: float, domain: str, *, graph: dict | None = None) -> dict:
         cutoff = position(cutoff)
         if cutoff is None:
             raise ValueError("cutoff is required")
-        graph = self.graph()
+        graph = self.graph() if graph is None else graph
         selected = []
         for c in graph["claims"]:
             if (c["scope"] != scope or c["domain"] != domain
@@ -482,34 +492,10 @@ class Store:
         return graph
 
     def validate_context_snapshot(self, context: dict) -> None:
-        """Validate the whole exported record, not just its visible description."""
-        if context.get("schema") != "pastiche.writer.context.v4":
-            raise Conflict("writer context schema changed; export current v4 context")
-        for key, domain in (("characters", "character"), ("world", "world"), ("perspectives", "epistemic")):
-            section = context.get(key, {})
-            if not section.get("claims"):
-                continue
-            current = self._context(context["scope"], context.get("cutoff", 1), domain)
-            if section.get("scope") != current["scope"] or section.get("cutoff") != current["cutoff"]:
-                raise Conflict("context scope/cutoff differs; export it again")
-            available = {c["id"]: c for c in current["claims"]}
-            for c in section["claims"]:
-                if available.get(c.get("id")) != c:
-                    raise Conflict("writer context is changed, stale or revoked; export it again")
-            entities = {e["id"]: e for e in current["entities"]}
-            if any(entities.get(e.get("id")) != e for e in section.get("entities", [])):
-                raise Conflict("context entity identity changed; export it again")
-
-
-def atomic_json(path: Path, body: Any) -> None:
-    import os
-    import tempfile
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(dump(body) + "\n")
-        os.replace(tmp, path)
-    finally:
-        if Path(tmp).exists():
-            Path(tmp).unlink()
+        """Recheck all selected claims, entities AND plot evidence at point of use."""
+        from .context_validation import validate_snapshot
+        if self.db.in_transaction:
+            validate_snapshot(self, context)
+        else:
+            with self.transaction():
+                validate_snapshot(self, context)

@@ -28,8 +28,11 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Synthetic offline regression tests (no corpus or production model)
         run: python -m unittest discover -s tests -v
+      - name: Controlled defect detection (finite verification mutants)
+        if: runner.os == 'Linux' && matrix.python == '3.12'
+        run: python verification/mutation_check.py
       - name: Compile scripts
-        run: python -m compileall -q skills
+        run: python -m compileall -q skills tests verification
       - name: Validate optional Japanese dictionary
         if: runner.os == 'Linux' && matrix.python == '3.12'
         run: |

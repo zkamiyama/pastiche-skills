@@ -1,4 +1,4 @@
-# Perspectives and executors — v3.0
+# Perspectives and executors — v3.1
 
 ## What is actually implemented
 
@@ -28,6 +28,8 @@ not accepted. Regenerate old plans rather than interpreting them as safe.
   unknown, not false. Initial beliefs are explicit per character and may be wrong.
 - Every scene has at least one declared event with a unique chronological
   integer `order`; the scene list remains the **presentation** order.
+  `depends_on` must finish strictly earlier in story chronology; flashbacks may
+  present a prerequisite later without reversing its story-time dependency.
 - `updates` change reality, not minds. `observations` update only participants
   with the required explicitly declared sight/hearing/reading/touch access.
   Observation values are taken from the modeled world, not copied from an
@@ -70,7 +72,9 @@ python3 skills/pastiche-profile/scripts/workbench.py perspectives \
   --out /private/profile/writing/perspective_states.json
 
 # Private character view: excludes objective truth, other minds, future summaries
-# and correctness labels. Fact descriptions must still be written neutrally.
+# and correctness labels. The default is BEFORE the scene's first event, not its
+# future exit state. Use --event-id EVENT for a later event entry. Fact descriptions
+# and identifiers must still be written neutrally.
 python3 skills/pastiche-profile/scripts/workbench.py scene-context \
   --plan /private/profile/writing/story_blueprint.json \
   --scene-id S2 --character-id A --out /private/scene-A.json
@@ -166,3 +170,21 @@ migration is intentional and is not a retained obsolete inference engine.
 Model task protocol changes invalidate affected caches. Task profiles should be
 versioned when changing the host's chosen worker/model. `--restart` clears local
 stage caches, not task answers; use a new `--agent-profile` for a fresh handoff.
+
+## v3.1 verification and boundary changes
+
+See [Correctness audit](CORRECTNESS_AUDIT.md) for the finite model, regression cases,
+reproducible commands, proof obligations and exclusions. Timeline records are
+closed schemas: unknown fields, ambiguous identifiers and Python-only values are
+not silently repaired. Callback/HTTP/file inputs use strict JSON (no duplicate
+members or nonfinite numbers). Truncated model output is never a successful empty
+analysis. Duplicate task IDs fail before inference, and simultaneous worker
+submissions cannot overwrite each other without explicit replacement.
+
+`scene-context` now emits `pastiche.scene.perspective.v2`; consumers must use
+`beliefs_before`, not a removed scene-exit `beliefs_after`. Writer context remains
+v4, but its claims, entity records and registered plot patterns are all rechecked.
+`writing/operation_status.json` is a commit marker with state and result SHA256;
+old result files are not deleted when a newer attempt fails, but are not that
+attempt's successful output. The inference protocol version is 3.1.0. Human DB
+review records and stable IDs are preserved.

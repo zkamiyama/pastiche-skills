@@ -103,7 +103,7 @@ python3 scripts/evaluate_lexical.py \
 
 ### 5a. Structural audit — プロットと人物の整合性を別に検査
 
-- `workbench.py audit-plan --plan ... --context ... --out ...` で、木構造の循環、場面の欠落/重複、未来の場面への前提依存、獲得前の知識利用を検査。
+- `workbench.py audit-plan --plan ... --context ... --out ...` で、木構造の循環、場面の欠落/重複、物語時系列に逆行する前提依存（提示順とは別）、獲得前の知識利用を検査。
 - `workbench.py audit-draft --out ... --draft ... --plan ... --context ... --api-base ... --model ...` は実際の新稿のセグメントIDを引用して、構造・因果・人物・口調の問題をLLMで再評価する。
 - これらは宣言された計画やモデル解釈の検査で、文学的品質・模倣の成功・独創性を保証しない。指摘0を正解証明にしない。
 - 長編がレビューの長さ上限を超えたら、切り詰めず場面ごとに明示的に検査。因果の修正を語尾の修正より先に行う。
@@ -117,12 +117,12 @@ python3 scripts/evaluate_lexical.py \
 
 - [Writing checklist](references/CHECKLIST.md) — 構造から表記の検証まで。
 - [LLM Style Method](../pastiche-profile/references/LLM_STYLE_METHOD.md) — 質的な作風分析とモデルによる検証の仕組み。
-- [Narrative method](../pastiche-profile/references/NARRATIVE_METHOD.md) — 旧方式の根拠と限界。
+- [Correctness audit](../../docs/CORRECTNESS_AUDIT.md) — 状態更新・時系列・情報非干渉の検証範囲。
 - [Re3](https://aclanthology.org/2022.emnlp-main.296/) / [DOC](https://aclanthology.org/2023.acl-long.190/) — 長い物語を計画と生成に分ける研究。これらをそのまま再実装したものではない。
 
 ## 世界設定の選択と検証
 
-`writer_context.json` v3 は `world` と `world_mode` を含む。`--world-mode original`（既定）なら新しい世界を設計し、原作固有の場所・組織・法則の連鎖を流用しない。`canon` は利用者が指定した作品版の世界を使うモード。人物のoriginal/canonとは独立であり、新人物を既存世界へ置くこともできる。
+`writer_context.json` v4 は `world` と `world_mode` を含む。`--world-mode original`（既定）なら新しい世界を設計し、原作固有の場所・組織・法則の連鎖を流用しない。`canon` は利用者が指定した作品版の世界を使うモード。人物のoriginal/canonとは独立であり、新人物を既存世界へ置くこともできる。
 
 計画の `world_claim_ids` と場面の `world_entity_ids` / `world_claim_ids` は、指定範囲で利用可能なIDだけに限定する。`world_note` には適用条件・例外をどう扱うか記録する。規範による禁止を物理的不可能と混同しない。推測、伝聞、時代不明の設定を絶対的な正史にしない。
 
@@ -133,8 +133,12 @@ python3 scripts/evaluate_lexical.py \
 計画には `epistemic` タイムラインを必須とする。旧形式の知識IDを単に追加する計画は使わない。世界の `updates`、実際の知覚経路を持つ人物の `observations`、聞いた情報と受け入れた情報を分ける `messages`、根拠付き推測、忘却、読者への開示を別に宣言する。各行動の心理的前提は `requires` に漏らさず記述する。
 
 1. `make_plan` が出す `perspective_plan_audit.json` の `needs_revision` を解消する。機械的な状態遷移の成功と、原文・場面への意味的な適合は別に扱う。
-2. `workbench.py scene-context --plan PLAN --scene-id SCENE --character-id PERSON --out PRIVATE_JSON` で、その人物だけの視点を出力する。内面・台詞担当のLLM／子エージェントには、この視点と公開済みの場面条件・口調だけを渡す。全体の世界真相や他人物の内心を同じプロンプトへ戻さない。
+2. `workbench.py scene-context --plan PLAN --scene-id SCENE --character-id PERSON --out PRIVATE_JSON` で、その場面の最初の出来事の**開始前**の視点だけを出力する。途中の出来事へ進む場合は `--event-id EVENT` を指定し、終了後の知識を前の台詞へ混ぜない。内面・台詞担当のLLM／子エージェントには、この視点と公開済みの場面条件・口調だけを渡す。全体の世界真相や他人物の内心を同じプロンプトへ戻さない。
 3. 全知の語り・構成・検証には明示的な `--director` を使う。誤信念を客観世界に合わせて勝手に訂正しない。
 4. 新稿監査の `writing/perspective_audit.json` で、未宣言の心理前提、観測できない事実の使用、内面への情報漏洩を確認する。モデル監査は人間の独立検証ではない。
 
 `writer_context.json` はv4へ再出力し、旧執筆計画は再生成する。既存DBのレビューは消さない。サブエージェント実行は `pastiche-llm-worker` を使い、計画・意味監査・新稿監査を同じJSON検証経路に通す。高次の「AがBの信念について信じること」は現在の一次信念エンジンの保証対象外。
+
+## v3.1の完了・再検証条件
+
+`writing/operation_status.json` の `state=completed` と `result_sha256` を確認し、`perspective_plan_audit.json` に `needs_revision` が残っていないことを別途確認する。失敗・結果待ちの実行で旧成果物を現在の結果として採用しない。人物・世界観・認識だけでなく、採用する物語パターンもDBと現行原文に照合される。推論中の訂正・使用停止・原稿更新は、結果保存前の再検証で拒否される。ファイルを編集したら再export・再監査する。

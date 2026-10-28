@@ -108,7 +108,9 @@ class EpistemicTests(unittest.TestCase):
 
     def test_private_context_omits_reality_other_minds_and_future(self):
         p=false_belief_plan();v=scene_view(p,'return','A');render=json.dumps(v,ensure_ascii=False)
-        self.assertNotIn('箱',render);self.assertNotIn('final_world',render);self.assertNotIn('truth',render)
+        self.assertNotIn('箱',render)
+        self.assertTrue({'world','final_world','final_beliefs','reader'}.isdisjoint(v))
+        self.assertNotIn('beliefs_after',v['events'][0])
         self.assertEqual(v['events'][0]['beliefs_before']['F']['value'],'かご')
         self.assertIn('world',scene_view(p,'return')['events'][0]['before'])
 
