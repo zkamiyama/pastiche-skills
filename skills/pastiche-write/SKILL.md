@@ -1,7 +1,7 @@
 ---
 name: pastiche-write
 description: >-
-  pastiche-profileのstyle_bible.md・qualitative_patterns.json・lexical_profile.json・narrative_rules.jsonを使用し、階層プロット・出典付き人物制約を用いて新規の題材で執筆する。人物の知識・物語の因果を設計し、語彙、表記揺れ、会話末の記号、文末のリズムを文脈に応じて反映し、生成後もローカルで定量確認する。
+  pastiche-profileのstyle_bible.md・qualitative_patterns.json・lexical_profile.json・narrative_rules.jsonを使用し、階層プロット・出典付き人物制約を用いて新規の題材で執筆する。人物の知識・物語の因果を設計し、語彙、表記揺れ、会話末の記号、文末のリズムを文脈に応じて反映し、生成後は根拠付き文体診断・部分改稿・認識と世界設定の再監査・匿名比較で採用を決め、改善不明なら元稿を残す。
 license: MIT
 compatibility: Any Agent Skills-compatible text LLM; Python 3.10+ standard library for optional exact-form review (no pip needed).
 ---
@@ -108,6 +108,34 @@ python3 scripts/evaluate_lexical.py \
 - これらは宣言された計画やモデル解釈の検査で、文学的品質・模倣の成功・独創性を保証しない。指摘0を正解証明にしない。
 - 長編がレビューの長さ上限を超えたら、切り詰めず場面ごとに明示的に検査。因果の修正を語尾の修正より先に行う。
 - 論理を修正したあとに既存の表記・語彙・文長のローカル評価を行う。自動検査から `human_approved` を作らない。
+
+### 5b. Refine — 根拠付き診断・部分改稿・比較採用
+
+生成後に文体の診断を行い、適用すべき特徴の不足・過剰がある場合だけ改稿する。「もっと似せる」という無条件の全体書き換えはしない。対応する実行環境では次を使う（siblingの `pastiche-profile` が必要）：
+
+```bash
+python3 scripts/refine.py \
+  --out /private/profile --draft /private/scene.txt \
+  --plan /private/profile/writing/story_blueprint.json \
+  --context /private/profile/writer_context.json \
+  --scene-id SCENE_ID --character-id CHARACTER_ID \
+  --patterns /private/profile/qualitative_patterns.json \
+  --style-profile /private/profile/style_profile.json \
+  --lexical-profile /private/profile/lexical_profile.json \
+  --api-base http://model-server.example/llm/v1 --model MODEL_ID
+```
+
+- 原稿は場面またはイベント単位にする。複数イベントを含む人物視点の場面では `--event-id` を指定し、そのイベントの文章だけを渡す。全知の叙述のみ明示的な `--director` を使う。人物用Refineへ世界の真相や後で知る情報を戻さない。
+- `STYLE_REVIEW` は対象外・判断困難も許容し、パターンIDと新稿の根拠箇所を挙げる。表層数値や短い語形を回数ノルマにしない。指定パターンがなければ、特徴を捏造せず元稿を残す。
+- `STYLE_REFINE` は診断に根拠がある箇所だけを変更する。人物の誤信念・情報取得・出来事・読者への開示・世界条件は変えない。変更には元稿のハッシュが必要で、元稿そのものは上書きしない。
+- 原稿と改稿案の意味監査を行い、認識・因果・世界設定の問題があれば計画側へ戻す。JSONの計画が同じでも、自然言語の意味保存が証明されたとは扱わない。
+- 改稿後に再診断し、A/Bを匿名化して提示順を入れ替えた2回の比較を行う。両方で文体適合が改善し、文章品質が悪化せず、意味が維持されたと判定した変更だけ採用する。不一致・同等・不明なら元稿／前回採用稿を保持する。
+- 既定は1回、`--max-rounds 2` が上限。回数を満たすための改稿はしない。同じモデルによる別タスクは独立検証ではない。HTTPでは任意の `--judge-model`、subagentでは `--judge-agent-profile` で評価役を分けられる。
+- `--executor subagent --task-dir /private/tasks` も利用できる。終了75は回答待ち。`pastiche-llm-worker` で委譲・回答登録し同じコマンドを再実行する。子エージェントを起動したふりはしない。
+- `writing/refine_status.json` の完了状態とハッシュを確認し、`writing/refine/<run_id>/result.json` の採否・理由を読む。`needs_structural_revision` は文章の合格ではない。採用稿は同じフォルダの `selected.txt`。一部場面の改善後も、完成稿全体の連続性と表層統計は再確認する。
+- `Refine` の評価はプロファイルへの適合であり、作者固有性や「同じ作家の文章に読める」ことの証明ではない。比較コーパス・held-out評価・人間のブラインド評価は別工程。
+
+詳しい制限・JSON契約・出力は [Style Refine](../../docs/STYLE_REFINE.md) を参照。
 
 ### 6. Deliver
 

@@ -283,11 +283,13 @@ def make_plan(out: Path, context: dict, brief: str, model, *, retries=2, interva
         store.close()
 
 
-@_tracked_operation("draft_audit")
-def audit_draft(out: Path, draft: Path, plan: dict, context: dict, model, *, retries=2, interval=15.0) -> dict:
-    validated = validate_plan(plan, context)
+def draft_audit_task(body: str, validated: dict, context: dict, *, focus: dict | None = None) -> Task:
+    """Shared semantic review, usable by audit and refinement without nested IO.
+
+    focus identifies an explicitly selected excerpt; absence of other scenes in
+    this excerpt is not itself a defect. This reviewer may see director state.
+    """
     perspective_states = simulate(validated["epistemic"], validated["scenes"], validated["characters"])
-    body, fingerprint = read_source(draft)
     if len(body) > 60_000:
         raise ValueError("draft exceeds one review window; review separate scenes explicitly, not a truncated draft")
     units = segments(body)
@@ -304,11 +306,15 @@ def audit_draft(out: Path, draft: Path, plan: dict, context: dict, model, *, ret
         "and unresolved conflicts are not authoritative canon. Cite the exact relevant "
         "world claim ID and draft segment; do not invent rules. "
         "Cite actual supplied draft segment IDs; no unsupported quality score. "
+        "When FOCUS is supplied, this is only that scene/event excerpt, not the whole "
+        "story. Do not demand that omitted scenes appear. Inspect only present prose. "
+        "An explicitly selected director narrator may state objective truth without "
+        "updating a character's beliefs; distinguish narrator assertions from character knowledge. "
         'JSON {"issues":[{"kind":"knowledge|causality|character|voice|structure|world|world_rule|world_time",'
         '"description":"short Japanese explanation","evidence_ids":["S000001"],'
         '"claim_id":null,"repair":"targeted revision"}]}. Empty issues does not prove correctness. '
         "\nPLAN=" + dump(validated) + "\nPERSPECTIVE_STATES=" + dump(perspective_states) + "\nCONTEXT=" + dump(context)
-        + "\nDRAFT=" + dump(units))
+        + "\nFOCUS=" + dump(focus) + "\nDRAFT=" + dump(units))
     if len(prompt) > 120_000:
         raise ValueError("review context too large; select fewer constraints")
     def validate(raw):
@@ -334,11 +340,19 @@ def audit_draft(out: Path, draft: Path, plan: dict, context: dict, model, *, ret
                            "repair": text(i.get("repair"), 400), "claim_id": cid,
                            "evidence_ids": ids(i.get("evidence_ids"), {u["id"] for u in units})})
         return {"issues": issues}
+    return Task("draft-audit", prompt, validate)
+
+
+@_tracked_operation("draft_audit")
+def audit_draft(out: Path, draft: Path, plan: dict, context: dict, model, *, retries=2, interval=15.0) -> dict:
+    validated = validate_plan(plan, context)
+    body, fingerprint = read_source(draft)
+    task = draft_audit_task(body, validated, context)
     store = Store(out / "character_graph.sqlite3")
     try:
         store.validate_context_snapshot(context)
         engine = Engine(store, model, out / "writing", retries=retries, interval=interval)
-        result = engine.run("draft_audit", [Task("draft-audit", prompt, validate)])["draft-audit"]
+        result = engine.run("draft_audit", [task])["draft-audit"]
         with store.transaction():
             store.validate_context_snapshot(context)
             if read_source(draft)[1] != fingerprint:

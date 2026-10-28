@@ -41,3 +41,13 @@ Use only generated profile artifacts, not the original corpus. `lexical_inventor
 - Does the scene writer receive only the intended character-view context, not director truth?
 - Have model-detected access/scene mismatches been repaired? An empty issue list is not proof.
 - Are subagent tasks private and validated on resume, rather than unreviewed raw answers?
+
+
+## 根拠付きRefine
+
+- パターンの適用対象外・判断困難を許容し、根拠のない修正要求を出していない。
+- 原稿ハッシュに結びついた局所差分のみ。人物の認識・観測・出来事・世界条件を勝手に変えていない。
+- 人物用改稿へ全知情報や未来状態を混ぜていない。全知の監査役の指摘を人物用にそのまま流していない。
+- 再診断・意味監査・提示順を入れ替えた比較のどれかが不明／悪化なら、元稿か前回採用稿を残した。
+- `refine_status.json` と採用ファイルのハッシュを照合し、旧結果を今回成功したものと誤認していない。
+- 統計への近さと文章品質を混同せず、同一モデルの一致を独立した文体類似度の証明としていない。
