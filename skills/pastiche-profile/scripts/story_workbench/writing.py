@@ -49,7 +49,7 @@ def prepare(out: Path, scope: str, cutoff=1.0, *, mode="original", character_ids
         auto_count = sum(c["status"] == "auto_accepted" for c in characters["claims"])
         if auto_count:
             warnings.append(f"{auto_count} character claims were auto-accepted but not human-verified; treat model interpretations as provisional.")
-        result = {"schema": "pastiche.writer.context.v1", "mode": mode, "scope": scope, "cutoff": cutoff,
+        result = {"schema": "pastiche.writer.context.v2", "mode": mode, "scope": scope, "cutoff": cutoff,
                   "characters": characters, "plot_patterns": patterns, "warnings": warnings,
                   "rules": ["user brief overrides statistical tendencies", "original mode must not copy source characters or concrete plot sequences",
                             "model-supported patterns are hypotheses", "unknown duration is not permanent truth"]}
