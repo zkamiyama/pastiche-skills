@@ -2,7 +2,7 @@ name: verified world graph source delivery
 on:
   push:
     branches: ['feat/world-knowledge-graph']
-    paths: ['.delivery/world-part-6.b64']
+    paths: ['.delivery/world-part-6.b64', '.github/workflows/world-source-delivery.yml']
 permissions:
   contents: write
 jobs:
@@ -24,14 +24,14 @@ jobs:
           assert hashlib.sha256(patch).hexdigest()==expected, 'Source patch hash mismatch; nothing applied'
           pathlib.Path('/tmp/world.patch').write_bytes(patch)
           PY
-          git apply --check --index /tmp/world.patch
-          git apply --index /tmp/world.patch
-          git rm .delivery/world-part-*.b64 .github/workflows/world-source-delivery.yml
+          git apply --check --index --exclude=.github/workflows/test.yml /tmp/world.patch
+          git apply --index --exclude=.github/workflows/test.yml /tmp/world.patch
+          git rm .delivery/world-part-*.b64
           python3 -m compileall -q skills
           node --check skills/pastiche-profile/scripts/story_workbench/web/app.js
           python3 -m unittest discover -s tests
           git diff --cached --check
-      - name: Commit verified readable source to the feature branch
+      - name: Commit verified readable application source to the feature branch
         run: |
           branch='feat/world-knowledge-graph'
           current=$(git ls-remote origin "refs/heads/$branch" | cut -f1)
