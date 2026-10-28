@@ -1,5 +1,6 @@
 """Smoke tests for the single-command onboarding path; no real model calls."""
 from pathlib import Path
+from types import SimpleNamespace
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 import json
@@ -34,6 +35,30 @@ class EasyStartTests(unittest.TestCase):
                 self.assertEqual(run.model_id(None, "http://192.0.2.12/llm/v1",
                                                "openai-compatible",
                                                "http://192.0.2.12/llm/v1/models"), "model-placeholder")
+
+    def test_default_llm_cli_requests_all_works(self):
+        # Do not execute real models: inspect which flags the entry point
+        # forwards to its LLM scene-analysis subprocess.
+        with TemporaryDirectory() as temporary:
+            out = Path(temporary) / "output"
+            out.mkdir()
+            (out / "qualitative_bible.md").write_text(
+                "# Qualitative Style Bible — LLM-assisted (private)\n",
+                encoding="utf-8")
+            with patch.object(run.subprocess, "run",
+                              return_value=SimpleNamespace(returncode=0)) as execute:
+                result = run.main([
+                    str(Path(temporary) / "corpus-placeholder"),
+                    "--api-base", "http://127.0.0.1/llm/v1",
+                    "--model", "fixture", "--out", str(out),
+                    "--no-lexical-review",
+                ])
+            self.assertEqual(result, 0)
+            commands = [c.args[0] for c in execute.call_args_list]
+            stage = next(cmd for cmd in commands
+                         if any(str(x).endswith("llm_style.py") for x in cmd))
+            self.assertEqual(stage[stage.index("--analysis-works") + 1], "0")
+            self.assertEqual(stage[stage.index("--chunks-per-work") + 1], "2")
 
     def test_check_sends_only_synthetic_request(self):
         with TemporaryDirectory() as temporary:

@@ -100,8 +100,8 @@ def main(argv=None):
                         help="maximum simultaneous LLM calls per stage (default 1)")
     parser.add_argument("--chunk-chars", type=int, default=3800)
     parser.add_argument("--max-works", type=int, default=0,help="legacy full mode: maximum works (0 means all)")
-    parser.add_argument("--analysis-works", type=int, default=30,
-                        help="llm mode: sample up to N works; 0 means all (default 30)")
+    parser.add_argument("--analysis-works", type=int, default=0,
+                        help="llm mode: all eligible works by default (0); positive N limits selected works")
     parser.add_argument("--narrative-works", type=int, default=18,
                         help="legacy fast mode: sample up to N works")
     parser.add_argument("--cluster-batch-size", type=int, default=30,
