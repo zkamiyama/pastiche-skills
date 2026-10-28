@@ -1,0 +1,338 @@
+diff --git a/tests/test_model_check.py b/tests/test_model_check.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..bac964c189430032e40bf3f9c66552837f5f9dca
+--- /dev/null
++++ b/tests/test_model_check.py
+@@ -0,0 +1,14 @@
++"""Finite model checks remain a mandatory part of offline regression testing."""
++from pathlib import Path
++import sys
++import unittest
++sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'verification'))
++from model_check import run_checks
++
++class BoundedModelTests(unittest.TestCase):
++    def test_exhaustive_finite_transition_model_and_noninterference(self):
++        result=run_checks()
++        self.assertEqual(result['status'],'passed')
++        self.assertGreater(result['checked'],40_000)
++        self.assertGreater(result['rejected'],1_000)
++        self.assertEqual(result['private_view_pairs'],27)
+diff --git a/tests/test_rigorous_audit.py b/tests/test_rigorous_audit.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..32d4ce04bf575407696323b87a6b10d593f5cdc2
+--- /dev/null
++++ b/tests/test_rigorous_audit.py
+@@ -0,0 +1,312 @@
++"""Adversarial regressions for the v3 correctness audit; synthetic inputs only."""
++from __future__ import annotations
++import copy
++import io
++import json
++from pathlib import Path
++import sys
++import tempfile
++import threading
++import unittest
++from concurrent.futures import ThreadPoolExecutor
++from contextlib import redirect_stderr
++from unittest.mock import patch
++
++SCRIPTS = Path(__file__).resolve().parents[1] / 'skills/pastiche-profile/scripts'
++sys.path.insert(0, str(SCRIPTS))
++import llm_runtime
++import task_transport as transport
++from story_workbench.epistemic import simulate, scene_view
++from story_workbench.engine import Engine, Task
++from story_workbench.store import Store, Conflict, atomic_json, uid
++from story_workbench.writing import prepare, validate_plan, make_plan, audit_draft
++from test_epistemic import false_belief_plan
++from test_world import WorldFixture
++
++
++def replay(p):
++    return simulate(p['epistemic'], p['scenes'], p['characters'])
++
++
++class TimelineAuditTests(unittest.TestCase):
++    def test_dependency_cannot_run_before_its_prerequisite(self):
++        p = false_belief_plan()
++        p['epistemic']['events'][0]['order'] = 2
++        # The dependent event's belief premise is otherwise satisfiable.
++        with self.assertRaisesRegex(ValueError, 'chronolog|prerequisite'):
++            replay(p)
++
++    def test_flashback_can_depend_on_an_earlier_story_event_shown_later(self):
++        p = false_belief_plan()
++        p['scenes'].reverse()
++        context = {'mode': 'original', 'world_mode': 'original',
++                   'characters': {'entities': []}, 'plot_patterns': []}
++        clean = validate_plan(p, context)
++        self.assertEqual(clean['scenes'][0]['id'], 'return')
++
++    def test_identifier_whitespace_is_rejected_not_silently_split(self):
++        p = false_belief_plan()
++        p['epistemic']['events'][0]['id'] = ' E1 '
++        with self.assertRaises(ValueError):
++            replay(p)
++
++    def test_duplicate_scene_or_character_is_rejected_by_standalone_replay(self):
++        for section in ('scenes', 'characters'):
++            p = false_belief_plan()
++            p[section].append(copy.deepcopy(p[section][0]))
++            with self.subTest(section=section), self.assertRaises(ValueError):
++                replay(p)
++
++    def test_misspelled_state_operation_is_not_silently_ignored(self):
++        p = false_belief_plan()
++        e = p['epistemic']['events'][0]
++        e['observatons'] = e.pop('observations')
++        with self.assertRaisesRegex(ValueError, 'field|key'):
++            replay(p)
++
++    def test_malformed_operation_is_validation_error_not_incidental_crash(self):
++        for field in ('updates', 'observations', 'messages', 'inferences', 'forget', 'requires'):
++            for value in (None, [], 'not a record', True):
++                p = false_belief_plan()
++                p['epistemic']['events'][0][field] = [value]
++                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
++                    replay(p)
++
++    def test_replay_returns_detached_normalized_records(self):
++        p = false_belief_plan()
++        expected = copy.deepcopy(p)
++        r = replay(p)
++        r['timeline']['facts'][0]['values'].append('injected')
++        self.assertEqual(p, expected)
++
++    def test_private_context_does_not_export_scene_exit_knowledge_at_entry(self):
++        p = false_belief_plan()
++        event = p['epistemic']['events'][1]
++        event['access']['A'] = ['sight']
++        event['observations'] = [{'agent':'A','fact':'F','channel':'sight'}]
++        view = scene_view(p, 'return', 'A')
++        # The default is usable BEFORE writing a scene. Its end-state is not
++        # already known to the actor at scene entry.
++        self.assertNotIn('箱', json.dumps(view, ensure_ascii=False))
++
++
++class TransportAuditTests(unittest.TestCase):
++    def test_duplicate_json_keys_are_not_accepted_as_a_worker_result(self):
++        with tempfile.TemporaryDirectory() as d:
++            path = Path(d)/'answer.json'
++            path.write_text('{"decision":true,"decision":false}', encoding='utf-8')
++            with self.assertRaises(ValueError):
++                transport._read(path)
++
++    def test_nonfinite_or_nonjson_callback_values_are_rejected(self):
++        for value in ({'x':float('nan')}, {'x':float('inf')}, {1:'bad key'}, {'x':(1,2)}):
++            with self.subTest(value=repr(value)), self.assertRaises(ValueError):
++                transport.CallableModel(lambda _:value,'fixture').ask('inert data')
++
++    def test_only_one_concurrent_submission_wins_without_replace(self):
++        with tempfile.TemporaryDirectory() as d:
++            root = Path(d); model = transport.SubagentModel(root)
++            with self.assertRaises(transport.TasksPending):
++                model.ask('one synthetic task')
++            task = transport.list_tasks(root)[0]['task_id']
++            target = root/'responses'/f'{task}.json'
++            barrier = threading.Barrier(2)
++            original = Path.exists
++            def both_observe_absence(p):
++                result = original(p)
++                if p == target and not result:
++                    barrier.wait(timeout=5)
++                return result
++            def submit(n):
++                try:
++                    transport.submit(root, task, {'answer':n})
++                    return 'ok'
++                except ValueError:
++                    return 'rejected'
++            # Deterministically expose the pre-check/replace race; corrected
++            # code uses an atomic publish and does not need this pre-check.
++            with patch.object(Path, 'exists', both_observe_absence), ThreadPoolExecutor(2) as pool:
++                outcomes = list(pool.map(submit, [1,2]))
++            self.assertEqual(sorted(outcomes), ['ok','rejected'])
++
++    def test_engine_rejects_duplicate_task_ids_before_any_model_call(self):
++        with tempfile.TemporaryDirectory() as d:
++            s=Store(Path(d)/'db.sqlite3'); calls=[]
++            try:
++                engine=Engine(s,transport.CallableModel(lambda p:calls.append(p) or {},'fixture'),Path(d),retries=0,interval=0)
++                with redirect_stderr(io.StringIO()), self.assertRaises(ValueError):
++                    engine.run('stage',[Task('same','first',lambda x:x),Task('same','second',lambda x:x)])
++                self.assertEqual(calls,[])
++            finally:s.close()
++
++    def test_stream_length_finish_is_not_a_success_even_with_valid_json(self):
++        model=llm_runtime.HTTPModel('openai-compatible','fixture','http://localhost/v1')
++        frame={'choices':[{'delta':{'content':'{"observations":[]}'},'finish_reason':'length'}]}
++        raw=('data: '+json.dumps(frame)+'\n\ndata: [DONE]\n').encode()
++        with self.assertRaises(llm_runtime.ModelRequestError):
++            model._stream_text(io.BytesIO(raw))
++
++    def test_stream_nonobject_event_is_controlled_validation_failure(self):
++        model=llm_runtime.HTTPModel('openai-compatible','fixture','http://localhost/v1')
++        with self.assertRaises(llm_runtime.ModelRequestError):
++            model._stream_text(io.BytesIO(b'data: []\n\ndata: [DONE]\n'))
++
++
++class SnapshotAuditTests(WorldFixture):
++    def test_empty_claim_section_cannot_smuggle_entity_records(self):
++        context=prepare(self.out,'novel:one')
++        context['world']['entities']=[{'id':'fabricated','name':'not registered','entity_type':'place'}]
++        store=Store(self.out/'character_graph.sqlite3')
++        try:
++            with self.assertRaises(Conflict):store.validate_context_snapshot(context)
++        finally:store.close()
++
++    def test_stale_plot_patterns_are_rejected_at_use_not_just_export(self):
++        store,src,*_ = self.fixture()
++        try:
++            pattern={'id':'P1','status':'model_supported','support_count':2,'steps':['a','b']}
++            bundle={'schema':'pastiche.plot.patterns.v1','scope':src['scope'],'work_ids':['W1','W2'],
++                    'source_versions':{src['id']:src['sha256']},'patterns':[pattern]}
++            store.artifact(uid('CORPUS',bundle['work_ids']),'patterns',bundle)
++            atomic_json(self.out/'plot_patterns.json',bundle)
++        finally:store.close()
++        context=prepare(self.out,src['scope'])
++        self.assertEqual(len(context['plot_patterns']),1)
++        # Remove other sections to isolate the stale plot-profile path.
++        for key in ('characters','world','perspectives'):
++            context[key]['claims']=[]; context[key]['entities']=[]
++        Path(src['path']).write_text('changed input',encoding='utf-8')
++        store=Store(self.out/'character_graph.sqlite3')
++        try:
++            with self.assertRaises(Conflict):store.validate_context_snapshot(context)
++        finally:store.close()
++
++    def test_claim_withdrawal_during_model_call_prevents_new_plan_publication(self):
++        store,src,*rest = self.fixture(); claim_id=rest[-1]; store.close()
++        context=prepare(self.out,src['scope'])
++        def callback(prompt):
++            if prompt.startswith('TASK=WRITE_PLAN'):
++                return false_belief_plan()
++            store=Store(self.db)
++            try:store.review(claim_id,'revoke',1,'human','withdrawn during inference')
++            finally:store.close()
++            return {'issues':[]}
++        with redirect_stderr(io.StringIO()), self.assertRaises(Conflict):
++            make_plan(self.out,context,'synthetic brief',transport.CallableModel(callback,'fixture'),retries=0,interval=0)
++        self.assertFalse((self.out/'writing/story_blueprint.json').exists())
++
++    def test_draft_change_during_model_call_invalidates_audit(self):
++        context=prepare(self.out,'fixture')
++        draft=self.root/'draft.txt';draft.write_text('Synthetic draft text.',encoding='utf-8')
++        def callback(prompt):
++            draft.write_text('The draft was changed.',encoding='utf-8')
++            return {'issues':[]}
++        with redirect_stderr(io.StringIO()), self.assertRaises(Conflict):
++            audit_draft(self.out,draft,false_belief_plan(),context,transport.CallableModel(callback,'fixture'),retries=0,interval=0)
++        self.assertFalse((self.out/'writing/plot_audit.json').exists())
++
++
++class BoundaryAuditTests(unittest.TestCase):
++    def test_task_request_is_verified_before_delegation_not_only_submission(self):
++        with tempfile.TemporaryDirectory() as d:
++            root=Path(d);m=transport.SubagentModel(root)
++            with self.assertRaises(transport.TasksPending):m.ask('original inert data')
++            task=transport.list_tasks(root)[0]['task_id']
++            p=root/'requests'/f'{task}.json';value=json.loads(p.read_text());value['prompt']='tampered'
++            p.write_text(json.dumps(value),encoding='utf-8')
++            with self.assertRaisesRegex(ValueError,'modified'):transport.list_tasks(root)
++
++    def test_invalid_unicode_and_nonfinite_exponent_are_rejected(self):
++        from json_boundary import loads
++        for raw in ('{"a":1e9999}', '{"a":"\\ud800"}', '{"a":NaN}'):
++            with self.subTest(raw=repr(raw)),self.assertRaises(ValueError):loads(raw)
++
++    def test_excessively_nested_json_is_a_controlled_rejection(self):
++        from json_boundary import loads
++        with self.assertRaises(ValueError):loads('['*2000+'0'+']'*2000)
++
++    def test_nonfinite_progress_interval_is_rejected(self):
++        for value in (float('nan'),float('inf'),-1,True):
++            with self.assertRaises(ValueError):llm_runtime.ProgressReporter(Path('/unused'),value)
++
++    def test_stream_truncation_remains_nonretryable(self):
++        model=llm_runtime.HTTPModel('ollama','fixture','http://localhost:11434')
++        frame={'response':'{}','done':True,'done_reason':'length'}
++        with self.assertRaises(llm_runtime.ModelRequestError) as cm:
++            model._stream_text(io.BytesIO((json.dumps(frame)+'\n').encode()))
++        self.assertFalse(cm.exception.transient)
++
++    def test_explicit_event_view_is_entry_not_end_of_event(self):
++        p=false_belief_plan()
++        e=p['epistemic']['events'][1]
++        e['access']['A']=['sight'];e['observations']=[{'agent':'A','fact':'F','channel':'sight'}]
++        p['epistemic']['events'].append({'id':'E3','scene_id':'return','order':2,'participants':['A'],'access':{}})
++        before=scene_view(p,'return','A',event_id='E2')
++        later=scene_view(p,'return','A',event_id='E3')
++        self.assertEqual(before['events'][0]['beliefs_before']['F']['value'],'かご')
++        self.assertEqual(later['events'][0]['beliefs_before']['F']['value'],'箱')
++        with self.assertRaises(ValueError):scene_view(p,'return','A',event_id='E1')
++
++    def test_finite_snapshot_byte_limit_includes_reports(self):
++        # Explicitly lower the byte budget locally for a cheap boundary check.
++        import story_workbench.epistemic as epistemic
++        original=epistemic.dump
++        p=false_belief_plan()
++        def counted(value):
++            encoded=original(value)
++            if isinstance(value,dict) and 'before' in value and 'after' in value:
++                return 'x'*16_000_001
++            return encoded
++        with patch.object(epistemic,'dump',counted),self.assertRaisesRegex(ValueError,'byte budget'):
++            replay(p)
++
++    def test_invalid_draft_plan_invalidates_previous_completion_marker(self):
++        with tempfile.TemporaryDirectory() as d:
++            root=Path(d);context=prepare(root,'fixture')
++            atomic_json(root/'writing/operation_status.json',{'state':'completed','operation':'draft_audit'})
++            with self.assertRaises(ValueError):
++                audit_draft(root,root/'missing-draft.txt',{},context,transport.CallableModel(lambda p:{},'fixture'))
++            status=json.loads((root/'writing/operation_status.json').read_text())
++            self.assertEqual(status['state'],'failed')
++
++
++class ClaimBoundaryTests(WorldFixture):
++    def test_invalid_object_is_not_silently_treated_as_no_relationship(self):
++        store,src,*rest=self.fixture();cid=rest[-1]
++        try:
++            original=store.claim(cid)['original']
++            for bad in (False,0,[],{}):
++                with self.subTest(bad=bad),self.assertRaises(ValueError):
++                    store.add_claim(dict(original,object=bad))
++        finally:store.close()
++
++    def test_reserved_reader_cannot_be_a_character_speaker(self):
++        store,src,q,a,place,system,resource,cid=self.fixture()
++        try:
++            with self.assertRaises(ValueError):
++                store.add_claim({'domain':'epistemic','kind':'perspective','subject':a,'object':system,
++                    'holder':a,'proposition_subject':system,'speaker':'$reader','basis':'communication',
++                    'stance':'affirmed','predicate':'location','value':'synthetic value',
++                    'scope':src['scope'],'evidence_ids':[q]})
++        finally:store.close()
++
++
++class PlanBoundaryTests(unittest.TestCase):
++    def test_malformed_plan_rows_are_controlled_rejections(self):
++        context={'mode':'original','world_mode':'original','characters':{'entities':[]},'plot_patterns':[]}
++        for section in ('characters','scenes','plot_tree'):
++            for bad in (None,True,'not an object',[]):
++                plan=false_belief_plan();plan[section]=[bad]
++                with self.subTest(section=section,bad=bad),self.assertRaises(ValueError):
++                    validate_plan(plan,context)
++        plan=false_belief_plan();plan['plot_tree'][0]['parent']=[]
++        with self.assertRaises(ValueError):validate_plan(plan,context)
++
++    def test_plan_review_event_must_belong_to_cited_scene(self):
++        from story_workbench.writing import check_plan_perspectives
++        class FakeEngine:
++            def run(self,stage,tasks):
++                return {t.id:t.validate({'issues':[{'kind':'belief_leak','scene_id':'return',
++                   'event_ids':['E1'],'description':'synthetic issue','repair':'synthetic repair'}]}) for t in tasks}
++        with self.assertRaises(ValueError):
++            check_plan_perspectives(false_belief_plan(),FakeEngine())
