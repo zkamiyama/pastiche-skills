@@ -69,8 +69,8 @@ LLMのリクエストは既定で逐次実行（`--llm-workers 1`）です。複
 
 ```bash
 # 最大4つのLLMリクエストを同時実行
-python3 -u skills/pastiche-profile/scripts/run.py /path/to/corpus \\
-  --api-base http://model-server.example/llm/v1 \\
+python3 -u skills/pastiche-profile/scripts/run.py /path/to/corpus \
+  --api-base http://model-server.example/llm/v1 \
   --llm-workers 4
 ```
 
