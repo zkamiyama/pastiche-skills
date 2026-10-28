@@ -65,6 +65,20 @@ python3 -u skills/pastiche-profile/scripts/run.py "/path/to/corpus" \
 
 ## 速度と精度を調整する
 
+LLMのリクエストは既定で逐次実行（`--llm-workers 1`）です。複数リクエストを同時処理できるモデルサーバーの場合、`--llm-workers N` で語彙の語感評価・fastモードのナラティブ探索・候補再検証を並列化できます。各段階の同時リクエスト数は最大 `N` です（段階間の同時実行は行いません）。
+
+```bash
+# 最大4つのLLMリクエストを同時実行
+python3 -u skills/pastiche-profile/scripts/run.py /path/to/corpus \\
+  --api-base http://model-server.example/llm/v1 \\
+  --llm-workers 4
+```
+
+- 推奨は `--llm-workers 2` から開始して、モデルサーバーの実際の並列処理性能とメモリ消費を確認しながら増やすことです。クライアント側の並列化だけでは、サーバー内部の同時推論数は増えません。
+- チェックポイントの読み書きはメインスレッドだけで実行し、途中から再開できます。応答の完了順が変わっても、プロファイルの統合順序は元の入力順のままです。
+- 従来の `--mode full` のナラティブ抽出部分は逐次実行のままです（語彙評価のみ `--llm-workers` 対応）。`--mode none` ではLLMを呼ばないため、この指定の効果はありません。
+- 並列化は呼び出し回数や料金を減らすものではありません。サーバーの並列容量が不足すると、かえって遅くなる場合があります。
+
 ```bash
 # Pythonだけで全作品の文体・記号・語彙を分析（モデル不要）
 python3 skills/pastiche-profile/scripts/run.py /path/to/corpus --mode none
