@@ -477,6 +477,7 @@ def model_jobs(jobs: Iterable[Any], model: Any, workers: int,
         for _ in range(workers):
             if not submit_next():
                 break
+        failure = None
         try:
             while pending:
                 done, _ = wait(tuple(pending), return_when=FIRST_COMPLETED)
@@ -486,13 +487,20 @@ def model_jobs(jobs: Iterable[Any], model: Any, workers: int,
                         result = future.result()
                     except TasksPending as exc:
                         deferred = exc
+                    except Exception as exc:
+                        # Stop launching new work, but drain in-flight successes
+                        # so the main thread can persist them before we fail.
+                        failure = failure or exc
                     else:
                         yield job, result
-                    submit_next()
+                    if failure is None:
+                        submit_next()
         except BaseException:
             for future in pending:
                 future.cancel()
             raise
+    if failure:
+        raise failure
     if deferred:
         raise deferred
 

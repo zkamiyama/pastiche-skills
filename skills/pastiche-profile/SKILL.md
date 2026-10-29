@@ -88,3 +88,9 @@ python3 -u scripts/run.py "/path/to/corpus" \
 - HTTP以外では `--executor subagent --task-dir /private/tasks` を使い、`pastiche-llm-worker` の手順でホストがタスクを実行する。終了コード75は待機中。全件を完了扱いしない。HTTP用のmodel/endpoint/key引数は併用しない。
 - サブエージェント方式のタスクファイルは原文を含むprivateデータ。原文を親の不要なコンテキストに集約せず、指定子エージェントへ必要なタスクだけ渡す。
 - v3は旧CLI `fast/full` と重複監査出力を削除した。DBレビューは維持し、キャッシュ更新と人間の判断の消去を混同しない。
+
+## STYLE_CLUSTER の出力エラーからの復旧
+
+`STYLE_CLUSTER` は通信・JSON・グループ検証を合計 `1 + --retries` 回まで実行する。未知ID・重複・ラベル不正は具体的なコードに分け、次の要求で修正を求める。失敗したグループを捨てて成功扱いしない。診断は `<out>/style_cluster_diagnostics/` にあり、原文・生の回答・モデル名・接続先は含まない。
+
+途中停止した場合は、同じコーパス・モデル・出力先・分割設定を使い、**`--restart` なし**で再実行する。`style_llm_checkpoint.sqlite3` を削除しない。再試行を尽くした場合のみ `--cluster-batch-size 12` などへの縮小を検討する。作品の観察キャッシュは維持されるが、グループの組み合わせは変わり得る。サブエージェント方式では訂正用の保留タスクを完了して再開する。詳細は [復旧仕様](../../docs/STYLE_CLUSTER_RECOVERY.md)。

@@ -14,11 +14,13 @@ from collections import Counter
 import json
 from pathlib import Path
 import sys
+import threading
 from typing import Any
 
 import llm_style_core as core
 import llm_runtime
 import corpus as corpus_utils
+from style_cluster_recovery import call_cluster
 
 
 JAPANESE_LABELS = {
@@ -149,6 +151,13 @@ def _cluster(items: list[dict[str, Any]], model: Any,
     all_nodes = []
     total_calls = 0
     total_cached = 0
+    count_lock = threading.Lock()
+
+    def count_request() -> None:
+        nonlocal total_calls
+        with count_lock:
+            total_calls += 1
+
     for dimension in core.DIMENSIONS:
         nodes = _initial_nodes(items, dimension)
         for round_no in range(rounds):
@@ -170,14 +179,13 @@ def _cluster(items: list[dict[str, Any]], model: Any,
 
             def call(payload: Any, worker_model: Any, panel_index: Any) -> Any:
                 dim, panel = payload
-                return reporter.call(
-                    worker_model, core.cluster_prompt(dim, panel),
-                    f"STYLE CLUSTER {dim} round={round_no + 1} panel={panel_index + 1}",
-                    retries=retries, record_status=workers == 1)
+                return call_cluster(
+                    dim, panel, worker_model, reporter, retries=retries,
+                    round_number=round_no + 1, panel_number=panel_index + 1,
+                    record_status=workers == 1, on_request=count_request)
 
-            results, calls, cached = _run_tasks(
+            results, _completed_panels, cached = _run_tasks(
                 requests, model, workers, call, reporter, "STYLE_CLUSTER", store)
-            total_calls += calls
             total_cached += cached
             merged = []
             handled = set()

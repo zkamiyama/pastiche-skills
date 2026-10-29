@@ -120,28 +120,70 @@ def cluster_prompt(dimension: str, panel: list[dict[str, Any]]) -> str:
         + '],"label":"短い抽象的な共通手法"}]}. '
 
         "Each group must have >=2 different supplied IDs. IDs must appear "
-        "at most once across groups. No quotations or names. "
+        "at most once across groups. Copy IDs exactly from ITEMS_JSON; do not "
+        "invent, abbreviate, renumber, or repeat IDs. Omitted items remain "
+        "singletons: do not return single-member groups. Labels must be "
+        "Japanese strings of 4-140 characters, on one line with no leading "
+        "or trailing whitespace. No quotations or names. Empty groups is "
+        "valid only when no matching technique is found. "
         f"Dimension={dimension}. ITEMS_JSON="
         + json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
     )
 
 
+class ClusterValidationError(ValueError):
+    """Safe, actionable diagnostics: never interpolate rejected model text."""
+    def __init__(self, code: str, group_index: int | None = None,
+                 member_index: int | None = None):
+        self.code = code
+        self.group_index = group_index
+        self.member_index = member_index
+        location = f"; group={group_index}" if group_index is not None else ""
+        if member_index is not None:
+            location += f"; member={member_index}"
+        super().__init__("STYLE_CLUSTER invented/duplicated IDs or invalid label: "
+                         + code + location)
+
+    def diagnostic(self) -> dict[str, Any]:
+        return {"code": self.code, "group_index": self.group_index,
+                "member_index": self.member_index}
+
+
 def parse_clusters(raw: Any, allowed: set[str]) -> list[tuple[list[str], str]]:
+    """Validate a disjoint grouping without guessing, dropping or renaming IDs."""
     if not isinstance(raw, dict) or not isinstance(raw.get("groups"), list):
-        raise ValueError("STYLE_CLUSTER did not return a groups array")
+        raise ClusterValidationError("groups_array_required")
     used: set[str] = set()
     result: list[tuple[list[str], str]] = []
-    for group in raw["groups"]:
+    for gi, group in enumerate(raw["groups"], 1):
         if not isinstance(group, dict):
-            raise ValueError("STYLE_CLUSTER returned a non-object group")
+            raise ClusterValidationError("group_object_required", gi)
         ids, label = group.get("ids"), group.get("label")
-        if (not isinstance(ids, list) or len(ids) < 2
-                or not all(isinstance(v, str) and v in allowed for v in ids)
-                or len(set(ids)) != len(ids) or set(ids) & used
-                or not plain(label, maximum=140)):
-            raise ValueError("STYLE_CLUSTER invented/duplicated IDs or invalid label")
-        used.update(ids)
-        result.append((ids, label))
+        if not isinstance(ids, list):
+            raise ClusterValidationError("ids_array_required", gi)
+        if len(ids) < 2:
+            raise ClusterValidationError("group_needs_two_ids", gi)
+        seen: set[str] = set()
+        for mi, member in enumerate(ids, 1):
+            if not isinstance(member, str):
+                raise ClusterValidationError("id_must_be_string", gi, mi)
+            if member not in allowed:
+                raise ClusterValidationError("unknown_id", gi, mi)
+            if member in seen:
+                raise ClusterValidationError("duplicate_within_group", gi, mi)
+            if member in used:
+                raise ClusterValidationError("duplicate_across_groups", gi, mi)
+            seen.add(member)
+        if not isinstance(label, str):
+            raise ClusterValidationError("label_must_be_string", gi)
+        if not 4 <= len(label) <= 140:
+            raise ClusterValidationError("label_length_4_to_140", gi)
+        if any(c in label for c in "\r\n"):
+            raise ClusterValidationError("label_must_be_single_line", gi)
+        if label != label.strip():
+            raise ClusterValidationError("label_outer_whitespace", gi)
+        used.update(seen)
+        result.append((list(ids), label))
     return result
 
 
