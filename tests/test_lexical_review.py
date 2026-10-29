@@ -21,6 +21,9 @@ class FakeModel:
         self.invalid=invalid
     def ask(self,prompt):
         self.calls.append(prompt)
+        if prompt.startswith('TASK=LEXICAL_IMPRESSION_PROSE'):
+            if self.invalid: return {'id':'L9999','typicality':'unusual'}
+            return {'typicality':'marked','role':'colloquial','confidence':'medium','note':'口語的な表現として使われる語形です'}
         ids=re.findall(r'"id":\s*"(L\d{4})"',prompt)
         if self.invalid:
             return {'assessments':[{'id':'L9999','typicality':'unusual',
@@ -46,12 +49,13 @@ class LexicalReviewTests(unittest.TestCase):
         model=FakeModel()
         result=lexical_review.assess(self.file,self.out,model,batch_size=2,retries=0,progress_interval=0)
         self.assertEqual(result['reviewed_count'],5)
-        self.assertEqual(result['actual_model_calls_this_run'],3)
+        self.assertEqual(result['actual_model_calls_this_run'],5)
         self.assertEqual(result['restored_batches'],0)
         self.assertEqual(result['assessments'][0]['typicality'],'marked')
         self.assertIn('model impression', (self.out/'lexical_interpretation.md').read_text(encoding='utf-8'))
         for prompt in model.calls:
-            self.assertIn('qualitative language-model judgment',prompt)
+            self.assertIn('general Japanese-language intuition',prompt)
+            self.assertNotRegex(prompt, r'L[0-9]{4}')
             self.assertNotIn('original source passages',prompt)
         model2=FakeModel()
         again=lexical_review.assess(self.file,self.out,model2,batch_size=2,retries=0,progress_interval=0)
@@ -71,7 +75,7 @@ class LexicalReviewTests(unittest.TestCase):
             ]},rows)
         self.assertEqual(invalid,[{'id':'L0002','typicality':'marked',
                                    'role':'emphasis','confidence':'low'}])
-        with self.assertRaisesRegex(ValueError,'no usable lexical labels'):
+        with self.assertRaisesRegex(ValueError,'required_fields_missing'):
             lexical_review.assess(self.file,self.out,FakeModel(invalid=True),
                                   batch_size=3,retries=0,progress_interval=0)
         self.assertFalse((self.out/'lexical_judgments.json').exists())

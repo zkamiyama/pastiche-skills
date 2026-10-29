@@ -1,3 +1,5 @@
+> Current live style requests use [Python-owned prose binding](PYTHON_OWNED_STYLE.md). ID-bearing contracts below are retained for historical diagnostics and compatibility tests, not as the default request interface.
+
 # STYLE_OBSERVE validation and bounded recovery
 
 ## What the error means

@@ -1,3 +1,7 @@
+# Current interface: Python-owned references
+
+The current live style and lexical path uses prose-first task binding; see [Python-owned style](../../../docs/PYTHON_OWNED_STYLE.md). Observations use exact temporary quote matching, clustering is a bounded Python-owned comparison process, and review/summary tasks are individually scoped. Old valid observations remain reusable; clustering and dependent stages use new keys. The historical algorithm below documents legacy cache provenance, NOT the current wire protocol.
+
 # LLM-first Style Induction — method and limits
 
 This describes the current `run.py --mode llm` implementation (`llm_style.py` + `llm_style_core.py`). Retired string-similarity/full-ontology execution paths have been removed in v3.

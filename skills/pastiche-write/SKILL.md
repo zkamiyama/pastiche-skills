@@ -186,3 +186,7 @@ Ollamaには `think: false` を送る。対応モデルで明示的に使う場�
 このHTTPフラグで変更したと説明しない。
 
 詳細: [Reasoning controls](../../docs/REASONING_CONTROL.md)。
+
+## Python所有の文体参照
+
+新しい文体プロファイルは `model_interface=python-owned-style.v1` を持つ。語彙・観察・分類・原文確認・執筆メモの参照はPythonが管理する。執筆メモは支持パターン1件に対応し、従来の `style_bible.md` / `qualitative_patterns.json` をそのまま参照できる。これは本文を書くホストや、構造化された計画・refineの契約全体を自由文へ変更したという意味ではない。[対象と境界](../../docs/PYTHON_OWNED_STYLE.md)。

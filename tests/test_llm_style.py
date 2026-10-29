@@ -43,6 +43,30 @@ class FixtureModel:
         try:
             if self.delay:
                 time.sleep(self.delay)
+            if prompt.startswith("TASK=STYLE_OBSERVE_PROSE"):
+                passages = json.loads(prompt.split("PASSAGES=", 1)[1])
+                quotes = [v[-80:] for v in passages if len(v) >= 4
+                          and sum(v[-80:] in q for q in passages) == 1]
+                if len(quotes) < 2:
+                    return {"observations": []}
+                descriptions = [
+                    ("narrative", "既存の期待に矛盾する知らせが届く", "説明を遅らせて別の手掛かりを先に示す", "読者の当初の判断を後から更新させる"),
+                    ("emotion", "人物が不意の出来事に直面する", "沈黙と短い行動を交互に示して感情を匂わせる", "説明文を増やさずにためらいを感じさせる"),
+                    ("lexicon", "未知の出来事を表現するとき", "一般的な動詞と短い助詞を反復して流れを作る", "落ち着いた語りのテンポを保つ")]
+                return {"observations": [{"dimension": d, "trigger": t, "technique": op, "effect": ef,
+                    "evidence_quotes": quotes[:2], "anchors": ["駅"] if d == "lexicon" and any("駅" in v for v in passages) else []}
+                    for d, t, op, ef in descriptions]}
+            if prompt.startswith("TASK=STYLE_COMPARE_PROSE"):
+                if self.invalid_groups:
+                    return {"compatible": True, "mechanism": "共通の表現操作です", "reason": "合成の説明です", "ids": ["UNKNOWN"]}
+                return {"compatible": not self.no_groups, "mechanism": "抽象的な同一の描写操作を反復する" if not self.no_groups else "",
+                        "reason": "合成資料で表現方法を比較した結果です"}
+            if prompt.startswith("TASK=STYLE_REVIEW_PROSE"):
+                return {"compatible": True, "reason": "指定の観察は共通の操作を示しています"}
+            if prompt.startswith("TASK=STYLE_EVIDENCE_PROSE"):
+                return {"supported": not self.reject_evidence, "basis": "rhetorical", "reason": "指定の二箇所で表現操作を確認しています"}
+            if prompt.startswith("TASK=STYLE_SYNTHESIZE_PROSE"):
+                return {"summary": "繰り返し観測された表現操作の使い分け", "writing_use": "新しい場面では表現の順序と強弱を選択する"}
             if prompt.startswith("TASK=STYLE_OBSERVE"):
                 evidence = re.findall(r"\[(W\d{4}:S\d{4,})\]", prompt)
                 return {"observations": [
@@ -110,6 +134,7 @@ class LlmStyleTests(unittest.TestCase):
                 "「どうして？」と友人は尋ねた。"
                 "しかし理由は誰にも分からなかった。\n"
             ) * 48
+            source = "\n".join(line + f"合成の段落番号{j}。" for j, line in enumerate(source.splitlines()))
             (self.corpus / f"fiction_{i:02d}.txt").write_text(source, encoding="utf-8")
 
     def tearDown(self):
@@ -220,8 +245,8 @@ class LlmStyleTests(unittest.TestCase):
         rules = json.loads((self.out / "narrative_rules.json").read_text())["rules"]
         self.assertTrue(all(x["status"] == "hypothesis" for x in rules))
 
-    def test_invalid_cluster_ids_fail_and_do_not_corrupt_artifacts(self):
-        with self.assertRaisesRegex(ValueError, "invented/duplicated IDs"):
+    def test_model_owned_cluster_ids_are_rejected_and_do_not_corrupt_artifacts(self):
+        with self.assertRaisesRegex(ValueError, "unexpected_fields"):
             self.analyze(FixtureModel(invalid_groups=True))
         progress = json.loads((self.out / "llm_progress.json").read_text())
         self.assertEqual(progress["state"], "failed")

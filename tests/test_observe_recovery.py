@@ -58,7 +58,15 @@ class Replies:
         value = next(self.replies)
         if isinstance(value, BaseException):
             raise value
-        return copy.deepcopy(value)
+        value = copy.deepcopy(value)
+        if prompt.startswith("TASK=STYLE_OBSERVE_PROSE") and isinstance(value, dict) and isinstance(value.get("observations"), list):
+            passages = json.loads(prompt.split("PASSAGES=", 1)[1])
+            for row in value["observations"]:
+                if not isinstance(row, dict): continue
+                refs = row.pop("evidence_ids", [])
+                row["evidence_quotes"] = [passages[0] if ref.endswith(":S0001") else
+                    passages[1] if ref.endswith(":S0002") else "UNMATCHED_PRIVATE_QUOTE" for ref in refs]
+        return value
 
 
 def legacy_clean(value, passage):
@@ -354,15 +362,21 @@ class ObservationIntegrationTests(unittest.TestCase):
         barrier = threading.Barrier(4)
         class Concurrent(Replies):
             def ask(self, prompt):
-                import re
-                work = re.search(r"\nDATA (W[0-9]+):", prompt).group(1)
+                passages = json.loads(prompt.split("PASSAGES=", 1)[1])
                 barrier.wait(timeout=5)
-                if work == "W0001":
-                    return bad()
-                time.sleep(0.02)
-                return reply(work)
+                row = good(); row.pop("evidence_ids")
+                row["evidence_quotes"] = [passages[0], passages[1]]
+                if "合成の場面番号1。" in passages[0]:
+                    row["evidence_quotes"][1] = "UNMATCHED_PRIVATE_QUOTE"
+                else:
+                    time.sleep(0.02)
+                return {"observations": [row]}
         m = Concurrent([])
-        jobs = [(f"W{i:04d}", 1, chunk(f"W{i:04d}")) for i in range(1, 5)]
+        jobs = []
+        for i in range(1, 5):
+            work=f"W{i:04d}"; passage=chunk(work)
+            passage[0]=(passage[0][0], passage[0][1]+f"合成の場面番号{i}。")
+            jobs.append((work, 1, passage))
         with redirect_stderr(io.StringIO()), self.assertRaises(core.ObservationValidationError):
             llm_style._observations(jobs, m, self.store, self.reporter, 4, 0)
         for work, _, passage in jobs:
@@ -402,7 +416,7 @@ class ObservationIntegrationTests(unittest.TestCase):
     def test_end_to_end_repair_has_no_blank_success_and_resumes(self):
         directory = self.out / "corpus"; directory.mkdir()
         for i in range(3):
-            (directory / f"sample{i}.txt").write_text("駅で昨日から待ち続けていた。\nやがて友人は手紙を見つけた。\n"*8, encoding="utf-8")
+            (directory / f"sample{i}.txt").write_text("\n".join(line + f"合成段落{j}。" for j, line in enumerate(("駅で昨日から待ち続けていた。\nやがて友人は手紙を見つけた。\n"*8).splitlines())), encoding="utf-8")
         class RepairFixture(FixtureModel):
             def __init__(self):
                 super().__init__(); self.broken = False

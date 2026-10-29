@@ -20,8 +20,10 @@ from typing import Any
 import llm_style_core as core
 import llm_runtime
 import corpus as corpus_utils
-from style_cluster_recovery import call_cluster
-from style_observe_recovery import call_observe
+from python_cluster import call_cluster
+import prose_contracts as prose
+from prose_runtime import call_prose
+from prose_observe_recovery import call_observe
 
 
 JAPANESE_LABELS = {
@@ -175,7 +177,7 @@ def _cluster(items: list[dict[str, Any]], model: Any,
             requests = []
             for panel_index, panel in enumerate(panels):
                 key = "cluster:" + core.digest(
-                    "cluster", {"dimension": dimension, "panel": panel}, model)
+                    "cluster-python-owned", {"contract": prose.VERSION, "dimension": dimension, "panel": panel}, model)
                 allowed = {node["id"] for node in panel}
                 def validate(raw: Any, choices: set[str] = allowed) -> Any:
                     # Convert tuple list (from cache) back through the same validator.
@@ -229,128 +231,125 @@ def _review_groups(nodes: list[dict[str, Any]],
                    reporter: llm_runtime.ProgressReporter,
                    workers: int, retries: int,
                    minimum_works: int, max_groups: int) -> tuple[list[dict[str, Any]], dict[str, list[str]], int, int]:
-    # Review only repeated groups, prioritizing wider independent-work support.
     candidates = [n for n in nodes if _work_count(n["members"], by_id) >= minimum_works]
     candidates.sort(key=lambda n: (-_work_count(n["members"], by_id),
-                                   -len(n["members"]), n["dimension"], n["id"]))
+                                  -len(n["members"]), n["dimension"], n["id"]))
     chosen = candidates[:max_groups]
     requests = []
+    request_count = 0
+    count_lock = threading.Lock()
+    def counted():
+        nonlocal request_count
+        with count_lock: request_count += 1
     for node in chosen:
-        # Limit group-review prompt size; span distinct works first.
-        selected = []
-        seen_works = set()
+        selected, seen_works = [], set()
         for oid in node["members"]:
             work_id = by_id[oid]["work_id"]
             if work_id not in seen_works:
-                selected.append(by_id[oid])
-                seen_works.add(work_id)
-            if len(selected) >= 12:
-                break
-        if len(selected) < 12:
-            selected_ids = {s["id"] for s in selected}
-            selected.extend(by_id[oid] for oid in node["members"]
-                            if oid not in selected_ids and len(selected) < 12)
+                selected.append(by_id[oid]); seen_works.add(work_id)
+            if len(selected) >= 12: break
+        selected_ids = {v["id"] for v in selected}
+        for oid in node["members"]:
+            if len(selected) >= 12: break
+            if oid not in selected_ids:
+                selected.append(by_id[oid]); selected_ids.add(oid)
         label = node["label"] or node["technique"]
-        key = "group-review:" + core.digest(
-            "review", {"label": label, "items": selected}, model)
-        allowed = {item["id"] for item in selected}
-        def validator(raw: Any, choices: set[str] = allowed) -> list[str]:
-            # Cache stores only list of accepted IDs, never raw model prose.
-            if isinstance(raw, list):
-                return sorted(raw) if (len(raw) == len(set(raw))
-                          and set(raw) <= choices) else core.parse_review(None, choices)
+        key = "group-review:" + core.digest("review-python-owned", {
+            "contract": prose.VERSION, "label": label, "items": selected}, model)
+        def validator(raw: Any, choices: set[str] = selected_ids) -> list[str]:
+            if isinstance(raw, list): raw = {"compatible": bool(raw), "accepted_ids": raw}
             return core.parse_review(raw, choices)
-        requests.append((node["id"], key,
-                         (node["dimension"], selected, label), validator))
-
-    def call(payload: Any, worker_model: Any, key: Any) -> Any:
+        requests.append((node["id"], key, (node["dimension"], selected, label), validator))
+    def call(payload: Any, worker_model: Any, logical_id: Any) -> Any:
         dimension, selected, label = payload
-        return reporter.call(
-            worker_model, core.review_prompt(dimension, selected, label),
-            f"STYLE GROUP CHECK {key}", retries=retries,
-            record_status=workers == 1)
+        accepted = []
+        for observation in selected:
+            verdict = call_prose(worker_model, reporter, kind="group-review",
+                binding={"dimension": dimension, "observation": observation, "mechanism": label},
+                prompt=prose.review_prompt(dimension, observation, label),
+                parser=prose.parse_review, label=f"STYLE GROUP CHECK {logical_id}",
+                retries=retries, on_request=counted)
+            if verdict["compatible"]: accepted.append(observation["id"])
+        if len(accepted) < 2 or _work_count(accepted, by_id) < minimum_works:
+            return {"compatible": False, "accepted_ids": []}
+        return {"compatible": True, "accepted_ids": accepted}
+    reviewed, _jobs, cached = _run_tasks(requests, model, workers, call,
+                                       reporter, "STYLE_GROUP_CHECK", store)
+    return chosen, reviewed, request_count, cached
 
-    reviewed, calls, cached = _run_tasks(
-        requests, model, workers, call, reporter, "STYLE_GROUP_CHECK", store)
-    return chosen, reviewed, calls, cached
 
-
-def _check_sources(chosen: list[dict[str, Any]],
-                   reviewed: dict[str, list[str]],
-                   by_id: dict[str, dict[str, Any]],
-                   chunk_map: dict[Any, Any], model: Any,
-                   store: llm_runtime.CheckpointStore,
-                   reporter: llm_runtime.ProgressReporter,
-                   workers: int, retries: int,
-                   minimum_works: int, verify_works: int) -> tuple[dict[str, list[str]], int, int]:
-    requests = []
+def _check_sources(chosen: list[dict[str, Any]], reviewed: dict[str, list[str]],
+                   by_id: dict[str, dict[str, Any]], chunk_map: dict[Any, Any], model: Any,
+                   store: llm_runtime.CheckpointStore, reporter: llm_runtime.ProgressReporter,
+                   workers: int, retries: int, minimum_works: int,
+                   verify_works: int) -> tuple[dict[str, list[str]], int, int]:
+    requests = []; request_count = 0; count_lock = threading.Lock()
+    def counted():
+        nonlocal request_count
+        with count_lock: request_count += 1
     for node in chosen:
         accepted = reviewed.get(node["id"], [])
-        if _work_count(accepted, by_id) < minimum_works:
-            continue
+        if _work_count(accepted, by_id) < minimum_works: continue
         selected, seen_works = [], set()
         for oid in accepted:
-            obs = by_id[oid]
-            if obs["work_id"] in seen_works:
-                continue
-            seen_works.add(obs["work_id"])
-            selected.append(obs)
-            if len(selected) >= verify_works:
-                break
+            observation = by_id[oid]
+            if observation["work_id"] in seen_works: continue
+            seen_works.add(observation["work_id"]); selected.append(observation)
+            if len(selected) >= verify_works: break
         label = node["label"] or node["technique"]
-        for obs in selected:
-            chunk = chunk_map[(obs["work_id"], obs["chunk_index"])]
-            key = "source-check:" + core.digest(
-                "source-check", {"item": obs, "chunk": chunk, "label": label}, model)
-            def validator(raw: Any, item: Any = obs, text: Any = chunk) -> bool:
-                if isinstance(raw, bool):
-                    return raw
+        for observation in selected:
+            chunk = chunk_map[(observation["work_id"], observation["chunk_index"])]
+            key = "source-check:" + core.digest("source-python-owned", {
+                "contract": prose.VERSION, "item": observation, "chunk": chunk, "label": label}, model)
+            def validator(raw: Any, item: Any = observation, passage: Any = chunk) -> bool:
+                if isinstance(raw, bool): return raw
                 if not isinstance(raw, dict) or type(raw.get("supported")) is not bool:
-                    raise ValueError("STYLE_EVIDENCE did not return a boolean verdict")
-                return core.valid_evidence(raw, item, text)
-            requests.append(((node["id"], obs["id"]), key, (obs, chunk, label), validator))
-
-    def call(payload: Any, worker_model: Any, key: Any) -> Any:
-        obs, chunk, label = payload
-        return reporter.call(
-            worker_model, core.evidence_prompt(chunk, obs, label),
-            f"STYLE EVIDENCE {key[0]} {key[1]}", retries=retries,
-            record_status=workers == 1)
-
-    answers, calls, cached = _run_tasks(
-        requests, model, workers, call, reporter, "STYLE_EVIDENCE", store)
-    supports = {}
-    for node in chosen:
-        supports[node["id"]] = sorted(
-            oid for (node_id, oid), valid in answers.items()
-            if node_id == node["id"] and valid)
-    return supports, calls, cached
+                    raise ValueError("invalid Python-bound source verdict")
+                return core.valid_evidence(raw, item, passage)
+            requests.append(((node["id"], observation["id"]), key, (observation, chunk, label), validator))
+    def call(payload: Any, worker_model: Any, logical_id: Any) -> Any:
+        observation, chunk, label = payload
+        verdict = call_prose(worker_model, reporter, kind="source-check",
+            binding={"observation": observation, "chunk": chunk, "mechanism": label},
+            prompt=prose.evidence_prompt(chunk, observation, label),
+            parser=prose.evidence_verdict, cache_validator=prose.cached_evidence,
+            label=f"STYLE EVIDENCE {logical_id[0]}", retries=retries, on_request=counted)
+        return {**verdict, "evidence_ids": list(observation["evidence_ids"])}
+    answers, _jobs, cached = _run_tasks(requests, model, workers, call,
+                                       reporter, "STYLE_EVIDENCE", store)
+    supported = {node["id"]: sorted(oid for (nid, oid), valid in answers.items()
+                                    if nid == node["id"] and valid) for node in chosen}
+    return supported, request_count, cached
 
 
 def _synthesize(patterns: list[dict[str, Any]], model: Any,
-                store: llm_runtime.CheckpointStore,
-                reporter: llm_runtime.ProgressReporter,
+                store: llm_runtime.CheckpointStore, reporter: llm_runtime.ProgressReporter,
                 workers: int, retries: int) -> tuple[list[dict[str, Any]], int, int]:
     supported = [p for p in patterns if p["status"] == "model_supported"][:24]
-    if not supported:
-        return [], 0, 0
-
-    key = "synthesis:" + core.digest("synthesize", supported, model)
-
-    def validate(raw: Any) -> list[dict[str, Any]]:
-        if isinstance(raw, list):
-            raw = {"sections": raw}
-        return core.parse_synthesis(raw, supported)
-
-    def call(payload: Any, worker_model: Any, logical_id: Any) -> Any:
-        return reporter.call(worker_model, core.synthesize_prompt(payload),
-                             "STYLE SYNTHESIZE", retries=retries,
-                             record_status=workers == 1)
-
-    data, calls, cached = _run_tasks(
-        [("overall", key, supported, validate)],
-        model, workers, call, reporter, "STYLE_SYNTHESIZE", store)
-    return data["overall"], calls, cached
+    if not supported: return [], 0, 0
+    request_count = 0; count_lock = threading.Lock()
+    def counted():
+        nonlocal request_count
+        with count_lock: request_count += 1
+    requests = []
+    for pattern in supported:
+        key = "synthesis:" + core.digest("synthesize-python-owned", {
+            "contract": prose.VERSION, "pattern": pattern}, model)
+        def validate(raw: Any, item: Any = pattern) -> dict:
+            if (not isinstance(raw, dict) or raw.get("dimension") != item["dimension"]
+                    or raw.get("pattern_ids") != [item["pattern_id"]]):
+                raise ValueError("summary differs from Python-owned task binding")
+            text = prose.parse_synthesis({k: raw.get(k) for k in ("summary", "writing_use")})
+            return {**text, "dimension": item["dimension"], "pattern_ids": [item["pattern_id"]]}
+        requests.append((pattern["pattern_id"], key, pattern, validate))
+    def call(pattern: Any, worker_model: Any, logical_id: Any) -> Any:
+        note = call_prose(worker_model, reporter, kind="synthesis", binding=pattern,
+            prompt=prose.synthesis_prompt(pattern), parser=prose.parse_synthesis,
+            label="STYLE SYNTHESIZE", retries=retries, on_request=counted)
+        return {**note, "dimension": pattern["dimension"], "pattern_ids": [pattern["pattern_id"]]}
+    results, _jobs, cached = _run_tasks(requests, model, workers, call,
+                                      reporter, "STYLE_SYNTHESIZE", store)
+    return [results[p["pattern_id"]] for p in supported], request_count, cached
 
 
 def make_patterns(nodes: list[dict[str, Any]],
@@ -472,6 +471,7 @@ def analyze(corpus: Path, out: Path, model: Any, *,
     out.mkdir(parents=True, exist_ok=True)
     store = llm_runtime.CheckpointStore(out / "style_llm_checkpoint.sqlite3", reset=restart)
     reporter = llm_runtime.ProgressReporter(out, interval=progress_interval)
+    reporter.reuse_prose_cache = not restart
     reporter.status(state="running", mode="llm-first", stage="begin",
                     total_works=len(works), sampled_works=len({j[0] for j in jobs}),
                     selected_chunks=len(jobs))
@@ -511,6 +511,11 @@ def analyze(corpus: Path, out: Path, model: Any, *,
                 break
         audit = {
             "schema": "pastiche.llm_style.audit.v1", "mode": "llm-first",
+            "model_interface": prose.VERSION,
+            "reference_owner": "python",
+            "observation_cache_reuse": "Prior validated observations may be reused; not newly quote-matched.",
+            "clustering_method": "bounded greedy group comparison; at most three candidate groups per node; not exhaustive",
+            "summary_binding": "one model-supported pattern per request; Python attaches the exact reference",
             "total_works": len(works), "sampled_works": len({j[0] for j in jobs}),
             "selected_chunks": len(jobs), "full_chunks": full_chunks,
             "discovered_observations": len(observations),
@@ -523,29 +528,31 @@ def analyze(corpus: Path, out: Path, model: Any, *,
                                    >= minimum_works]),
             "supported_by_dimension": dict(Counter(
                 row["dimension"] for row in accepted)),
-            "summarized_dimensions": [s["dimension"] for s in synthesis],
+            "summarized_dimensions": sorted({s["dimension"] for s in synthesis}),
             "actual_llm_calls_this_run": counts,
             "restored_checkpoint_entries": cache,
             "note": "Counts refer to sampled works; review is model-based, not human ground truth.",
         }
         # All exported content is abstract; the model saw raw scenes only transiently.
         llm_runtime.atomic_json_write(out / "qualitative_observations.json", {
-            "schema": core.SCHEMA, "observations": observations,
+            "schema": core.SCHEMA, "observations": observations, "model_interface": prose.VERSION,
             "sampling_note": "Observations cover sampled chunks, not all corpus text."})
         llm_runtime.atomic_json_write(out / "qualitative_patterns.json", {
-            "schema": core.SCHEMA, "patterns": patterns,
+            "schema": core.SCHEMA, "patterns": patterns, "model_interface": prose.VERSION,
             "sampled_works": audit["sampled_works"],
             "total_works": len(works),
             "limits": ["LLM-generated descriptions may be inaccurate",
                        "similar meaning does not establish identical technique",
                        "model source checks are not independent verification"]})
         llm_runtime.atomic_json_write(out / "qualitative_summary.json", {
-            "schema": core.SCHEMA,
+            "schema": "pastiche.qualitative.summary.v2",
             "sections": synthesis,
+            "model_interface": prose.VERSION,
+            "reference_scope": "one input pattern per writing note",
             "note": "LLM-written guidance supported only by model-screened pattern IDs."})
         llm_runtime.atomic_json_write(out / "narrative_rules.json", {
             "schema": "pastiche.narrative.v2", "generator_version": core.VERSION,
-            "mode": "llm-first-semantic", "works": audit["sampled_works"],
+            "mode": "llm-first-semantic", "model_interface": prose.VERSION, "works": audit["sampled_works"],
             "total_works": len(works), "rules": narrative_rules,
             "minimum_independent_works": minimum_works,
             "model_backend": model.backend, "model_name": model.model})

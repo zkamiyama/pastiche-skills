@@ -246,11 +246,11 @@ class ClusterRecoveryTests(unittest.TestCase):
     def test_resume_from_old_observe_cache_skips_observation_model_calls(self):
         corpus = self.out/'corpus'; corpus.mkdir()
         for i in range(3):
-            (corpus/f'{i}.txt').write_text(('駅で友人は待っていた。返事は届かなかった。\n')*50, encoding='utf-8')
+            (corpus/f'{i}.txt').write_text('\n'.join(f'駅で友人は待っていた。返事は届かなかった。合成段落{j}。' for j in range(50)), encoding='utf-8')
         output = self.out/'analysis'
         args = dict(analysis_works=0, chunks_per_work=1, chunk_chars=1800,
                     verify_works=2, retries=0, progress_interval=0, llm_workers=2)
-        with redirect_stderr(io.StringIO()), self.assertRaises(core.ClusterValidationError):
+        with redirect_stderr(io.StringIO()), self.assertRaisesRegex(ValueError, "unexpected_fields"):
             llm_style.analyze(corpus, output, FixtureModel(invalid_groups=True), **args)
         model = FixtureModel()
         with redirect_stderr(io.StringIO()):

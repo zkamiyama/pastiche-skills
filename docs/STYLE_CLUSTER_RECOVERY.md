@@ -1,3 +1,5 @@
+> Current live style requests use [Python-owned prose binding](PYTHON_OWNED_STYLE.md). ID-bearing contracts below are retained for historical diagnostics and compatibility tests, not as the default request interface.
+
 # Recovering STYLE_CLUSTER failures
 
 ## What the error establishes

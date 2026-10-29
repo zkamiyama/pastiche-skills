@@ -15,6 +15,9 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+import threading
+import prose_contracts as prose
+from prose_runtime import call_prose
 from typing import Any
 
 from llm_runtime import CheckpointStore, ProgressReporter, ModelRequestError, atomic_json_write, model_jobs, reasoning_cache_parameters
@@ -139,9 +142,14 @@ def assess(candidate_file:Path,out:Path,model:Any,*,batch_size:int=24,retries:in
     out.mkdir(parents=True,exist_ok=True)
     checkpoint=CheckpointStore(out/'lexical_review_checkpoint.sqlite3',reset=restart)
     reporter=ProgressReporter(out,interval=progress_interval)
+    reporter.reuse_prose_cache=not restart
     assessed_by_batch:dict[int,list[dict[str,Any]]]={}
     pending=[]
     actual_calls=0
+    count_lock=threading.Lock()
+    def counted():
+        nonlocal actual_calls
+        with count_lock: actual_calls+=1
     cached=0
     try:
         reporter.status(state='running',stage='LEXICAL_REVIEW',
@@ -164,20 +172,19 @@ def assess(candidate_file:Path,out:Path,model:Any,*,batch_size:int=24,retries:in
 
         def review_one(job:Any, worker_model:Any)->list[dict[str,Any]]:
             batch_no,rows,_key=job
-            reply=reporter.call(worker_model,review_prompt(rows),
-                                f'LEXICAL REVIEW {batch_no}/{len(batches)}',
-                                retries=retries,record_status=llm_workers==1)
-            clean=validate_judgments(reply,rows)
-            if not clean:
-                # Never cache an invalid or empty response; allow retry on next run.
-                raise ModelRequestError('no usable lexical labels returned; batch can be retried')
+            clean=[]
+            for row in rows:
+                value=call_prose(worker_model,reporter,kind='lexical-form',binding=row,
+                    prompt=prose.lexical_prompt(row),parser=prose.parse_lexical,
+                    label=f'LEXICAL REVIEW {batch_no}/{len(batches)}',
+                    retries=retries,on_request=counted)
+                clean.append({'id':row['id'], **{k:value[k] for k in ('typicality','role','confidence')}})
             return clean
 
         for (batch_no,rows,key),clean in model_jobs(pending,model,llm_workers,review_one):
             # A single thread owns all writes to the SQLite checkpoint.
             checkpoint.put(key,{'assessments':clean})
             assessed_by_batch[batch_no]=clean
-            actual_calls+=1
             reporter.status(stage='LEXICAL_REVIEW',
                             completed_batches=len(assessed_by_batch),
                             classified=sum(len(v) for v in assessed_by_batch.values()))
@@ -198,6 +205,7 @@ def assess(candidate_file:Path,out:Path,model:Any,*,batch_size:int=24,retries:in
                 'reviewed_count':len(collected),'uncertain_count':sum(x['typicality']=='uncertain' for x in collected),
                 'model_backend':model.backend,'model_name':model.model,
                 'note':'not a statistical estimate of Japanese word frequency or author uniqueness',
+                'model_interface':prose.VERSION,
                 'total_batches':len(batches),'actual_model_calls_this_run':actual_calls,
                 'restored_batches':cached}
         atomic_json_write(out/'lexical_judgments.json',result)

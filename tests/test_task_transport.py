@@ -86,6 +86,7 @@ class TaskTransportTests(unittest.TestCase):
         folder=self.root/'corpus';folder.mkdir()
         source=('ミナは駅でレンの話を聞いた。帰る時刻はまだ決まっていない。\n'
                 'ミナとレンは新しい知らせを待った。二人は別の方法を話し合った。\n')*4
+        source="\n".join(line+f"合成段落{j}。" for j,line in enumerate(source.splitlines()))
         for i in range(3):(folder/f'{i}.txt').write_text(source,encoding='utf-8')
         return folder
 
@@ -107,7 +108,7 @@ class TaskTransportTests(unittest.TestCase):
     def test_style_pipeline_handoff_uses_same_contracts(self):
         corpus=self.corpus();out=self.root/'style';fixture=FixtureModel()
         # lexical anchor in synthetic fixture is the station character present in source.
-        for _ in range(10):
+        for _ in range(24):
             try:
                 audit=llm_style.analyze(corpus,out,self.model,retries=0,progress_interval=0,llm_workers=3)
                 break
@@ -137,7 +138,7 @@ class TaskTransportTests(unittest.TestCase):
         new_tasks=[r for r in list_tasks(self.queue) if r['state']=='pending']
         self.assertTrue(new_tasks)
         prompt=json.loads((self.queue/'requests'/f"{new_tasks[0]['task_id']}.json").read_text(encoding='utf-8'))['prompt']
-        self.assertTrue(prompt.startswith('TASK=STYLE_CLUSTER'))
+        self.assertTrue(prompt.startswith('TASK=STYLE_COMPARE_PROSE'))
 
     def test_removed_legacy_modes_are_not_accepted(self):
         with redirect_stderr(StringIO()),self.assertRaises(SystemExit):
