@@ -39,8 +39,12 @@ class Engine:
         self.lock = threading.Lock()
 
     def key(self, task: Task, stage: str = "") -> str:
-        return uid("task", VERSION, stage, self.model.backend, self.model.model,
-                   getattr(self.model, "endpoint", "fixture"), getattr(self.model, "max_output_tokens", 0), task.prompt)
+        parts = [VERSION, stage, self.model.backend, self.model.model,
+                 getattr(self.model, "endpoint", "fixture"), getattr(self.model, "max_output_tokens", 0), task.prompt]
+        reasoning = llm_runtime.reasoning_cache_parameters(self.model)
+        if reasoning:
+            parts.append(reasoning)
+        return uid("task", *parts)
 
     def _invoke(self, task: Task) -> Any:
         if not hasattr(self.local, "model"):

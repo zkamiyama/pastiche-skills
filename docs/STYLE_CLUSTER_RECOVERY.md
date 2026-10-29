@@ -95,3 +95,11 @@ model was used; a particular model's ability to correct its output is not guaran
 python -m unittest discover -s tests -p 'test_cluster_recovery.py' -v
 python -m unittest discover -s tests -v
 ```
+
+## Subsequent reasoning-control update
+
+The retry fix above preserved its original keys. The later default-OFF HTTP
+reasoning change separately adds effective reasoning controls to cache identity.
+Old keys remain available under explicit `--reasoning-effort auto`; OFF and
+other explicit modes recompute affected tasks without deleting old entries.
+See [Reasoning controls](REASONING_CONTROL.md) before updating an interrupted run.

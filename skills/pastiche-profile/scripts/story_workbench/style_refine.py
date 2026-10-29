@@ -15,6 +15,7 @@ from pathlib import Path
 import tempfile
 
 import pastiche
+from llm_runtime import reasoning_cache_parameters
 from json_boundary import loads, atomic_json
 from task_transport import TasksPending
 from . import refine_contracts as c
@@ -160,8 +161,12 @@ def _atomic_text(path, body):
 
 def _model_key(model):
     # Deployment identifiers affect cache correctness but never appear in artifacts.
-    return c.digest(dump([model.backend, model.model, getattr(model, 'endpoint', ''),
-                          getattr(model, 'max_output_tokens', 0)]))
+    parts = [model.backend, model.model, getattr(model, 'endpoint', ''),
+             getattr(model, 'max_output_tokens', 0)]
+    reasoning = reasoning_cache_parameters(model)
+    if reasoning:
+        parts.append(reasoning)
+    return c.digest(dump(parts))
 
 
 @contextmanager

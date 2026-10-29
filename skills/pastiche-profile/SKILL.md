@@ -94,3 +94,19 @@ python3 -u scripts/run.py "/path/to/corpus" \
 `STYLE_CLUSTER` は通信・JSON・グループ検証を合計 `1 + --retries` 回まで実行する。未知ID・重複・ラベル不正は具体的なコードに分け、次の要求で修正を求める。失敗したグループを捨てて成功扱いしない。診断は `<out>/style_cluster_diagnostics/` にあり、原文・生の回答・モデル名・接続先は含まない。
 
 途中停止した場合は、同じコーパス・モデル・出力先・分割設定を使い、**`--restart` なし**で再実行する。`style_llm_checkpoint.sqlite3` を削除しない。再試行を尽くした場合のみ `--cluster-batch-size 12` などへの縮小を検討する。作品の観察キャッシュは維持されるが、グループの組み合わせは変わり得る。サブエージェント方式では訂正用の保留タスクを完了して再開する。詳細は [復旧仕様](../../docs/STYLE_CLUSTER_RECOVERY.md)。
+
+## HTTP Reasoning Effort（既定OFF）
+
+共通HTTPクライアントは `--reasoning-effort none` が既定。OpenAI互換には
+`reasoning_effort: "none"` と `chat_template_kwargs: {"enable_thinking": false}`、
+Ollamaには `think: false` を送る。対応モデルで明示的に使う場合は
+`--reasoning-effort low|medium|high`、サーバー既定へ任せる場合は `auto`。
+テンプレート拡張だけを省略するには `--no-thinking-template` を使う。
+未対応サーバーで黙って別モードへフォールバックしない。
+
+推論設定はLLMキャッシュのキーに含む。旧版の暗黙のサーバー既定からOFFへの変更では
+既存の観察を含むLLM段階が再計算されるが、旧キャッシュや人間のレビューを削除しない。
+`--restart` は不要。`auto` のみ従来のキーを維持する。ホストLLMやサブエージェントの推論を
+このHTTPフラグで変更したと説明しない。
+
+詳細: [Reasoning controls](../../docs/REASONING_CONTROL.md)。

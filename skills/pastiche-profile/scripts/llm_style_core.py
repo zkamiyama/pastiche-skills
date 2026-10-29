@@ -12,6 +12,7 @@ import math
 from typing import Any
 
 import corpus as corpus_utils
+from llm_runtime import reasoning_cache_parameters
 
 VERSION = "1.0.1"
 MAX_OBSERVATIONS = 7
@@ -26,6 +27,9 @@ def digest(stage: str, data: Any, model: Any) -> str:
         "model": model.model, "backend": model.backend,
         "endpoint": getattr(model, "endpoint", "fixture"),
     }
+    reasoning = reasoning_cache_parameters(model)
+    if reasoning:
+        payload["reasoning"] = reasoning
     return hashlib.sha256(json.dumps(
         payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 

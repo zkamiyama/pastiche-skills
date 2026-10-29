@@ -41,6 +41,18 @@ python3 -u skills/pastiche-profile/scripts/run.py /path/to/corpus \
 - `--check` は合成JSONだけで通信確認し、コーパスを読みません。
 - 初回は必要に応じて `fugashi-plus[unidic-lite]` を専用キャッシュvenvに導入。オフライン等では `--no-auto-install --morphology none` で全文語彙一覧なしの計測ができます。
 
+## Reasoning / Thinking は既定でOFF
+
+HTTP解析は `--reasoning-effort none` が既定です。OpenAI互換APIへ
+`reasoning_effort: "none"` と `chat_template_kwargs: {"enable_thinking": false}` を送り、
+Ollamaには `think: false` を送ります。必要な場合だけ `low` / `medium` / `high` を明示し、
+`auto` はこれらの指定を送らずサーバー既定へ戻します。モデル・サーバーの対応が必要です。
+
+テンプレート拡張を受け付けないOpenAI互換APIには `--no-thinking-template` で拡張だけを省略できます。
+profile・plan・audit・refine・researchで共通です。ホストLLM／サブエージェントの推論は変更しません。
+**推論設定ごとにキャッシュを分離するため、旧版から既定OFFへ変えるとLLM段階は再計算されます。**
+既存キャッシュ・原文・人間のレビューは削除しません。詳細: [Reasoning controls](docs/REASONING_CONTROL.md)。
+
 ## 文体のサンプリングと全文の構造解析を分離
 
 | 経路 | 読む範囲 | 処理 |

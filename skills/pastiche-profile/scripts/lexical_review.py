@@ -17,7 +17,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from llm_runtime import CheckpointStore, ProgressReporter, ModelRequestError, atomic_json_write, model_jobs
+from llm_runtime import CheckpointStore, ProgressReporter, ModelRequestError, atomic_json_write, model_jobs, reasoning_cache_parameters
 
 SCHEMA = 'pastiche.lexical.judgments.v1'
 VERSION = '0.1.0'
@@ -79,6 +79,9 @@ def validate_judgments(reply:Any, rows:list[dict[str,Any]]) -> list[dict[str,Any
 def batch_fingerprint(rows:list[dict[str,Any]], model:Any)->str:
     material={'version':VERSION,'rows':rows,'model':model.model,'backend':model.backend,
               'endpoint':getattr(model,'endpoint','fixture')}
+    reasoning = reasoning_cache_parameters(model)
+    if reasoning:
+        material['reasoning'] = reasoning
     return hashlib.sha256(json.dumps(material,ensure_ascii=False,sort_keys=True).encode('utf-8')).hexdigest()
 
 

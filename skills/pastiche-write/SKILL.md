@@ -170,3 +170,19 @@ python3 scripts/refine.py \
 ## v3.1の完了・再検証条件
 
 `writing/operation_status.json` の `state=completed` と `result_sha256` を確認し、`perspective_plan_audit.json` に `needs_revision` が残っていないことを別途確認する。失敗・結果待ちの実行で旧成果物を現在の結果として採用しない。人物・世界観・認識だけでなく、採用する物語パターンもDBと現行原文に照合される。推論中の訂正・使用停止・原稿更新は、結果保存前の再検証で拒否される。ファイルを編集したら再export・再監査する。
+
+## HTTP Reasoning Effort（既定OFF）
+
+共通HTTPクライアントは `--reasoning-effort none` が既定。OpenAI互換には
+`reasoning_effort: "none"` と `chat_template_kwargs: {"enable_thinking": false}`、
+Ollamaには `think: false` を送る。対応モデルで明示的に使う場合は
+`--reasoning-effort low|medium|high`、サーバー既定へ任せる場合は `auto`。
+テンプレート拡張だけを省略するには `--no-thinking-template` を使う。
+未対応サーバーで黙って別モードへフォールバックしない。
+
+推論設定はLLMキャッシュのキーに含む。旧版の暗黙のサーバー既定からOFFへの変更では
+既存の観察を含むLLM段階が再計算されるが、旧キャッシュや人間のレビューを削除しない。
+`--restart` は不要。`auto` のみ従来のキーを維持する。ホストLLMやサブエージェントの推論を
+このHTTPフラグで変更したと説明しない。
+
+詳細: [Reasoning controls](../../docs/REASONING_CONTROL.md)。
