@@ -49,7 +49,9 @@ def observe_prompt(work_id: str, chunk: list[tuple[str, str]]) -> str:
         "plot topics, genre clichés, value judgments, and speculative motives. "
         "Observe emotional progression, narrator distance, dialogue technique, "
         "lexical register and locally repeated expressions when evidenced. "
-        "Use Japanese for all descriptions, each 4-110 characters. "
+        "Use Japanese for all descriptions, each 4-110 characters, on one line "
+        "with no leading or trailing whitespace. Use exactly one of these "
+        "dimension values: narrative, lexicon, emotion, voice, dialogue, sensory, pacing. "
         "A device needs at least TWO distinct evidence IDs from this chunk. "
         "Write abstract trigger/technique/effect only: no source quotations, "
         "names, plot descriptions, full phrases or instructions. "
@@ -65,41 +67,111 @@ def observe_prompt(work_id: str, chunk: list[tuple[str, str]]) -> str:
     )
 
 
-def clean_observations(reply: Any, chunk: list[tuple[str, str]]) -> list[dict[str, Any]]:
+class ObservationValidationError(ValueError):
+    """Only fixed codes, field names and numeric counts; never rejected prose."""
+    def __init__(self, code: str, diagnostic: dict[str, Any]):
+        self.code = code
+        self._diagnostic = diagnostic
+        codes = sorted({issue["code"] for issue in diagnostic["issues"]})
+        prefix = ("STYLE_OBSERVE did not return an observations array" if
+                  code == "observations_array_required" else
+                  "STYLE_OBSERVE returned no valid evidence-grounded observations")
+        super().__init__(prefix + ": " + code +
+                         (" (" + ", ".join(codes) + ")" if codes else ""))
+
+    def diagnostic(self) -> dict[str, Any]:
+        # Return a detached JSON object; all values originate in the validator.
+        return {"code": self.code, **json.loads(json.dumps(self._diagnostic))}
+
+
+def check_observations(reply: Any, chunk: list[tuple[str, str]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Apply the existing acceptance contract and explain rejected items safely.
+
+    Partial acceptance, first-seven selection, exact Unicode anchors, ID
+    de-duplication and verbatim checks intentionally retain their old semantics.
+    Empty initial observations are valid; nonempty all-rejected input is not.
+    """
+    report: dict[str, Any] = {"received_count": None, "checked_count": 0,
+                             "accepted_count": 0, "rejected_count": 0,
+                             "ignored_count": 0, "issues": []}
     if not isinstance(reply, dict) or not isinstance(reply.get("observations"), list):
-        raise ValueError("STYLE_OBSERVE did not return an observations array")
+        report["issues"].append({"code": "observations_array_required"})
+        raise ObservationValidationError("observations_array_required", report)
+    received = reply["observations"]
+    report.update(received_count=len(received), checked_count=min(len(received), MAX_OBSERVATIONS),
+                  ignored_count=max(0, len(received) - MAX_OBSERVATIONS))
     accepted: list[dict[str, Any]] = []
     ids = {eid for eid, _ in chunk}
     source = "".join(text for _, text in chunk)
-    for item in reply["observations"][:MAX_OBSERVATIONS]:
-        if not isinstance(item, dict) or item.get("dimension") not in DIMENSIONS:
+
+    def reject(index: int, code: str, field: str | None = None) -> None:
+        issue: dict[str, Any] = {"item_index": index, "code": code}
+        if field is not None:
+            issue["field"] = field  # A literal field name, never a model-provided key.
+        report["issues"].append(issue)
+        report["rejected_count"] += 1
+
+    for index, item in enumerate(received[:MAX_OBSERVATIONS], 1):
+        if not isinstance(item, dict):
+            reject(index, "observation_object_required")
+            continue
+        if item.get("dimension") not in DIMENSIONS:
+            reject(index, "unknown_dimension")
             continue
         fields = ("trigger", "technique", "effect")
-        if not all(plain(item.get(field)) for field in fields):
+        invalid = next((field for field in fields if not plain(item.get(field))), None)
+        if invalid is not None:
+            value = item.get(invalid)
+            if not isinstance(value, str):
+                code = "description_string_required"
+            elif not 4 <= len(value) <= 110:
+                code = "description_length_4_to_110"
+            elif value != value.strip():
+                code = "description_outer_whitespace"
+            else:
+                code = "description_single_line_required"
+            reject(index, code, invalid)
             continue
-        if any(corpus_utils._is_verbatim_fragment(item[field], chunk)
-               for field in fields):
+        copied = next((field for field in fields
+                       if corpus_utils._is_verbatim_fragment(item[field], chunk)), None)
+        if copied is not None:
+            reject(index, "source_verbatim_overlap", copied)
             continue
         evidence = item.get("evidence_ids")
-        if (not isinstance(evidence, list) or len(evidence) < 2
-                or not all(isinstance(x, str) and x in ids for x in evidence)
-                or len(set(evidence)) < 2):
+        if not isinstance(evidence, list):
+            reject(index, "evidence_array_required")
+            continue
+        if len(evidence) < 2:
+            reject(index, "two_distinct_evidence_ids_required")
+            continue
+        if not all(isinstance(x, str) and x in ids for x in evidence):
+            reject(index, "unknown_or_invalid_evidence_id")
+            continue
+        if len(set(evidence)) < 2:
+            reject(index, "two_distinct_evidence_ids_required")
             continue
         anchors = item.get("anchors", [])
         if not isinstance(anchors, list) or len(anchors) > 2:
+            reject(index, "anchors_array_max_two")
             continue
         if item["dimension"] != "lexicon":
             anchors = []
         if not all(isinstance(x, str) and 1 <= len(x) <= 12
                    and x in source and not any(c.isspace() for c in x)
                    for x in anchors):
+            reject(index, "anchor_not_exact_short_source_form")
             continue
         accepted.append({k: item[k] for k in ("dimension", *fields)}
                         | {"evidence_ids": sorted(set(evidence)),
                            "anchors": list(dict.fromkeys(anchors))})
-    if reply["observations"] and not accepted:
-        raise ValueError("STYLE_OBSERVE returned no valid evidence-grounded observations")
-    return accepted
+    report["accepted_count"] = len(accepted)
+    if received and not accepted:
+        raise ObservationValidationError("all_observations_rejected", report)
+    return accepted, report
+
+
+def clean_observations(reply: Any, chunk: list[tuple[str, str]]) -> list[dict[str, Any]]:
+    return check_observations(reply, chunk)[0]
 
 
 def cluster_prompt(dimension: str, panel: list[dict[str, Any]]) -> str:

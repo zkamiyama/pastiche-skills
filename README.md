@@ -22,6 +22,10 @@
 
 `STYLE_CLUSTER invented/duplicated IDs or invalid label` の復旧処理を追加しました。原因を区別し、厳密な検証を維持したまま既定で最大2回の訂正要求を行います。**同じ出力先・設定で、`--restart` を付けずに再実行**すると、完了済みの観察キャッシュを再利用します。インストール済みSkillも更新してください。[復旧手順・診断・制約](docs/STYLE_CLUSTER_RECOVERY.md)。
 
+## 観察（STYLE_OBSERVE）で停止した場合
+
+`STYLE_OBSERVE returned no valid evidence-grounded observations` では、説明の長さ・原文との一致・根拠IDなどの棄却理由を記録し、同じ検証基準のまま要求を再生成します。通信・JSON・観察検証を合わせて既定で最大3回です。診断は `<out>/style_observe_diagnostics/`。**成功済みキャッシュを維持し、`--restart` なしで再開**できます。全件棄却を空の成功に置き換えません。[復旧手順と診断コード](docs/STYLE_OBSERVE_RECOVERY.md)。
+
 ## 始め方
 
 ```bash

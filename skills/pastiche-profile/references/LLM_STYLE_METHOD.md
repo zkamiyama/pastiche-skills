@@ -23,6 +23,15 @@ The output must not be interpreted as proof of author identity, unique authorial
 - Cache key combines model identity, endpoint, prompt/code version and **hash of full input chunk**. Only accepted abstract observations go to SQLite; the input text is not stored in the checkpoint.
 - The output `qualitative_observations.json` includes only anonymized IDs, abstract descriptions and short matched anchor strings. It never includes passages or paths.
 
+Observation transport and validation now share a bounded corrective retry budget
+(`1 + --retries` per chunk). Fixed rejection codes and counts are stored under
+`style_observe_diagnostics/`, without raw replies or source text. The first-seven
+filter and partial-acceptance contract are unchanged. An initially empty array
+is allowed; an empty repair after validation failure in that invocation is not.
+Existing valid observation cache keys remain compatible with this recovery change;
+clarified prompts apply only to cache misses. See
+[observation recovery](../../../docs/STYLE_OBSERVE_RECOVERY.md).
+
 This is *qualitative sampling*; drawing no observations from a scene is not evidence of the absence of a technique in the full work.
 
 ## Phase B: Meaning-based candidate grouping

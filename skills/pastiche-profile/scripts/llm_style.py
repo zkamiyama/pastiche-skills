@@ -21,6 +21,7 @@ import llm_style_core as core
 import llm_runtime
 import corpus as corpus_utils
 from style_cluster_recovery import call_cluster
+from style_observe_recovery import call_observe
 
 
 JAPANESE_LABELS = {
@@ -103,6 +104,13 @@ def _observations(jobs: list[Any], model: Any,
                   workers: int, retries: int) -> tuple[list[dict[str, Any]], dict[Any, Any], int, int]:
     requests = []
     chunk_map = {}
+    request_count = 0
+    count_lock = threading.Lock()
+
+    def count_request() -> None:
+        nonlocal request_count
+        with count_lock:
+            request_count += 1
     for work_id, position, chunk in jobs:
         chunk_map[(work_id, position)] = chunk
         if len(chunk) < 2:
@@ -117,11 +125,11 @@ def _observations(jobs: list[Any], model: Any,
 
     def call(payload: Any, worker_model: Any, logical_id: Any) -> Any:
         work_id, passage = payload
-        return reporter.call(worker_model, core.observe_prompt(work_id, passage),
-                             f"STYLE OBSERVE {work_id} chunk {logical_id[1]}",
-                             retries=retries, record_status=workers == 1)
+        return call_observe(work_id, passage, worker_model, reporter,
+                            retries=retries, chunk_index=logical_id[1],
+                            record_status=workers == 1, on_request=count_request)
 
-    data, calls, restored = _run_tasks(
+    data, _completed_jobs, restored = _run_tasks(
         requests, model, workers, call, reporter, "STYLE_OBSERVE", store)
     all_items = []
     for work_id, position, chunk in jobs:
@@ -130,7 +138,7 @@ def _observations(jobs: list[Any], model: Any,
                 "id": f"O{len(all_items) + 1:05d}",
                 "work_id": work_id, "chunk_index": position,
             })
-    return all_items, chunk_map, calls, restored
+    return all_items, chunk_map, request_count, restored
 
 
 def _initial_nodes(items: list[dict[str, Any]],
