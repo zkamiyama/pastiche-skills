@@ -286,15 +286,15 @@ class PythonMembershipTests(unittest.TestCase):
         patterns=[{'pattern_id':f'P{i:04d}','status':'model_supported','dimension':'emotion',
             'trigger':f'場面の条件{i}','mechanism':f'描写操作{i}','effect':'感情を間接的に示す','support_work_count':2} for i in range(1,5)]
         class Notes(Model):
-            def ask(self,prompt):
+            def ask_text(self,prompt):
                 payload=json.loads(prompt.split('PATTERN=',1)[1]);n=int(payload['mechanism'][-1])
                 time.sleep((5-n)*0.005)
-                return {'summary':f'合成の描写操作{n}に限定した要約です','writing_use':'別の場面で同じ操作を用います'}
+                return f'合成の描写操作{n}に限定した要約です' if prompt.startswith('TASK=STYLE_SUMMARY_TEXT') else '別の場面で同じ操作を用います'
         store=llm_runtime.CheckpointStore(self.out/'main.sqlite3')
         try:
             with redirect_stderr(io.StringIO()):
                 rows,calls,_=llm_style._synthesize(patterns,Notes([]),store,self.reporter,4,0)
-            self.assertEqual(calls,4)
+            self.assertEqual(calls,8)
             for i,row in enumerate(rows,1):
                 self.assertEqual(row['pattern_ids'],[f'P{i:04d}']);self.assertIn(f'操作{i}',row['summary'])
         finally:store.close()

@@ -14,6 +14,7 @@ from json_boundary import read_object, atomic_json, object_copy
 
 SCHEMA = 'pastiche.agent-task.v1'
 MAX_BYTES = 8_000_000
+TEXT_MODE = 'plain-text.v1'
 
 
 class TasksPending(Exception):
@@ -60,11 +61,28 @@ class SubagentModel:
         return self  # Stateless per request; atomic files, no callbacks.
 
     def ask(self, prompt: str) -> dict:
-        task_id = hashlib.sha256(_json([SCHEMA, self.model, prompt]).encode('utf-8')).hexdigest()
+        return self._ask_bound(prompt)
+
+    def ask_text(self, prompt: str) -> str:
+        result = self._ask_bound(prompt, text_mode=True)
+        if set(result) != {'text'} or not isinstance(result['text'], str):
+            raise ValueError('host text task requires exactly one string in its text transport envelope')
+        return result['text']
+
+    def _ask_bound(self, prompt: str, *, text_mode: bool = False) -> dict:
+        identity = [SCHEMA, self.model, prompt]
+        if text_mode: identity.append(TEXT_MODE)
+        task_id = hashlib.sha256(_json(identity).encode('utf-8')).hexdigest()
         request = {'schema': SCHEMA, 'task_id': task_id, 'profile': self.model,
                    'input_sha256': hashlib.sha256(prompt.encode('utf-8')).hexdigest(),
                    'prompt': prompt, 'output_contract': 'JSON object; application validates domain schema on resume',
                    'privacy': 'Contains private source data. No web search, external tools or onward sharing.'}
+        if text_mode:
+            request['response_mode'] = TEXT_MODE
+            request['output_contract'] = (
+                'Generate plain UTF-8 prose, not JSON. The HOST wraps the answer '
+                'as {"text": "the unchanged answer"} for tasks submit. '
+                'Do not ask the inference model to generate that transport envelope.')
         req_path = self.task_dir/'requests'/f'{task_id}.json'
         if req_path.exists():
             if _read(req_path) != request:
@@ -101,6 +119,12 @@ belongs to the task runner. Thread safety is the host callback's responsibility.
         result = self.callback(prompt)
         return object_copy(result)
 
+    def ask_text(self, prompt: str) -> str:
+        result = self.callback(prompt)
+        if not isinstance(result, str) or len(result.encode('utf-8')) > MAX_BYTES:
+            raise ValueError('host callback text result must be a bounded string')
+        return result
+
 
 def task_id_arg(value: str) -> str:
     if not re.fullmatch('[0-9a-f]{64}', value):
@@ -116,7 +140,12 @@ def _request(path: Path) -> dict:
             or not isinstance(profile,str) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,80}',profile)
             or not isinstance(prompt,str)):
         raise ValueError('invalid task request contract')
-    expected = hashlib.sha256(_json([SCHEMA, profile, prompt]).encode('utf-8')).hexdigest()
+    identity = [SCHEMA, profile, prompt]
+    if 'response_mode' in request:
+        if request['response_mode'] != TEXT_MODE:
+            raise ValueError('invalid host response mode')
+        identity.append(TEXT_MODE)
+    expected = hashlib.sha256(_json(identity).encode('utf-8')).hexdigest()
     if expected != task_id or request.get('input_sha256') != hashlib.sha256(prompt.encode('utf-8')).hexdigest():
         raise ValueError('modified request cannot be delegated or answered')
     return request

@@ -35,6 +35,9 @@ class FixtureModel:
         self.reject_evidence = reject_evidence
         self.delay = delay
 
+    def ask_text(self, prompt):
+        return self.ask(prompt)['text']
+
     def ask(self, prompt):
         with self.lock:
             self.calls.append(prompt.split(".")[0])
@@ -43,6 +46,10 @@ class FixtureModel:
         try:
             if self.delay:
                 time.sleep(self.delay)
+            if prompt.startswith("TASK=STYLE_SUMMARY_TEXT"):
+                return {"text": "繰り返し観測された表現操作の使い分け"}
+            if prompt.startswith("TASK=STYLE_WRITING_USE_TEXT"):
+                return {"text": "新しい場面では表現の順序と強弱を選択する"}
             if prompt.startswith("TASK=STYLE_OBSERVE_PROSE"):
                 passages = json.loads(prompt.split("PASSAGES=", 1)[1])
                 quotes = [v[-80:] for v in passages if len(v) >= 4

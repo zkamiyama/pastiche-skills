@@ -22,7 +22,7 @@ import llm_runtime
 import corpus as corpus_utils
 from python_cluster import call_cluster
 import prose_contracts as prose
-from prose_runtime import call_prose
+from prose_runtime import call_prose, load_cached_prose
 from prose_observe_recovery import call_observe
 
 
@@ -343,9 +343,21 @@ def _synthesize(patterns: list[dict[str, Any]], model: Any,
             return {**text, "dimension": item["dimension"], "pattern_ids": [item["pattern_id"]]}
         requests.append((pattern["pattern_id"], key, pattern, validate))
     def call(pattern: Any, worker_model: Any, logical_id: Any) -> Any:
-        note = call_prose(worker_model, reporter, kind="synthesis", binding=pattern,
-            prompt=prose.synthesis_prompt(pattern), parser=prose.parse_synthesis,
-            label="STYLE SYNTHESIZE", retries=retries, on_request=counted)
+        # Keep completed legacy notes, but never repeat the fragile two-key LLM task.
+        note = load_cached_prose(worker_model, reporter, kind="synthesis", binding=pattern,
+                                 parser=prose.parse_synthesis, retries=retries)
+        if note is None:
+            note = {}
+            for field in ("summary", "writing_use"):
+                result = call_prose(worker_model, reporter, kind="synthesis-text",
+                    binding={"contract": prose.SYNTHESIS_TEXT_VERSION, "pattern": pattern, "field": field},
+                    prompt=prose.synthesis_text_prompt(pattern, field),
+                    parser=lambda raw, f=field: {"text": prose.parse_synthesis_text(raw, f)},
+                    cache_validator=lambda raw, f=field: prose.cached_synthesis_text(raw, f),
+                    label=f"STYLE SYNTHESIZE {logical_id} field={field}",
+                    retries=retries, on_request=counted, text_output=True)
+                note[field] = result["text"]
+            note = prose.parse_synthesis(note)
         return {**note, "dimension": pattern["dimension"], "pattern_ids": [pattern["pattern_id"]]}
     results, _jobs, cached = _run_tasks(requests, model, workers, call,
                                       reporter, "STYLE_SYNTHESIZE", store)
@@ -515,7 +527,8 @@ def analyze(corpus: Path, out: Path, model: Any, *,
             "reference_owner": "python",
             "observation_cache_reuse": "Prior validated observations may be reused; not newly quote-matched.",
             "clustering_method": "bounded greedy group comparison; at most three candidate groups per node; not exhaustive",
-            "summary_binding": "one model-supported pattern per request; Python attaches the exact reference",
+            "summary_binding": "one pattern/field per text request; Python assembles fields and references; validated prior notes may be reused",
+            "synthesis_text_interface": prose.SYNTHESIS_TEXT_VERSION,
             "total_works": len(works), "sampled_works": len({j[0] for j in jobs}),
             "selected_chunks": len(jobs), "full_chunks": full_chunks,
             "discovered_observations": len(observations),

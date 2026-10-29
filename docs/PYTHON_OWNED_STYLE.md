@@ -27,10 +27,11 @@ summary record per dimension.
 | Clustering | Compatibility of one candidate with one fixed group, a common mechanism and explanation | Candidate scheduling, shortlist, membership, IDs, disjointness and retention |
 | Group review | One observation's compatibility and explanation | Which observation was reviewed and accepted |
 | Source check | Support verdict, relation basis and explanation | Selected source passages and their references |
-| Writing note | Summary and application prose for one supported pattern | Exactly that input pattern's reference and dimension |
+| Writing note | Plain prose for one summary OR writing-use request | Field names, JSON assembly and exactly that pattern's reference and dimension |
 
-JSON is retained as a small envelope for bounded free-text fields, booleans and
-necessary category judgments. Arbitrary document formats, model-assigned indices,
+JSON is retained for observation records, booleans and necessary category
+judgments. New synthesis requests use plain text, not model-authored JSON keys.
+See [Plain-text synthesis and compatible resumption](PLAIN_TEXT_SYNTHESIS.md). Arbitrary document formats, model-assigned indices,
 parallel output arrays and fuzzy repairs of identifiers are **not** substitutes
 for an explicit Python task binding. Semantics still depend on model judgments;
 Python cannot prove that an interpretation or literary effect is true.
