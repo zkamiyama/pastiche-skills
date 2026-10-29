@@ -35,6 +35,37 @@ parallel output arrays and fuzzy repairs of identifiers are **not** substitutes
 for an explicit Python task binding. Semantics still depend on model judgments;
 Python cannot prove that an interpretation or literary effect is true.
 
+## Explanatory prose is not a compact artifact field
+
+`reason` and lexical `note` are free explanations. They accept nonempty strings
+with paragraph breaks, from 1 to 16,384 Unicode characters after trimming only
+outer whitespace. The generous maximum is a resource guard, not a stylistic
+quota or proof of evidence quality. Text is not silently truncated or rewritten.
+The prompts state the type and limits. Compact exported fields retain their
+explicit contracts: for example `summary`/`writing_use` remain 8–160 characters
+and a group mechanism remains a single line of 4–140 characters.
+
+Previously these explanations accidentally inherited an undisclosed 4–300
+character bound. A well-formed source verdict could therefore fail solely because
+its reason was longer than 300 characters. The single generic diagnostic did not
+tell the model which field or constraint to repair. Description errors now report
+`description_string_required`, `description_too_short` or `description_too_long`,
+with only the known field name, required bounds and actual type/length. Corrective
+requests include those same safe details, not the rejected text. Source-check
+logs distinguish both the group and the observation being checked.
+
+The source support boolean, relation basis, selected evidence, Python binding,
+ID rejection and promotion conditions are unchanged. Source-check reasons are
+still discarded before persistence because they can quote private text. Nothing
+turns a negative/uncertain verdict into support merely to finish the pipeline.
+A missing, empty or non-string required reason still fails; retries stay bounded.
+
+This is a compatible explanation-envelope correction, not a clustering-method
+change. `python-owned-style.v1` and all cache identities remain unchanged, and
+previously validated results are rechecked and reused. Observations, completed
+cluster panels, group reviews and valid source checks need not be regenerated.
+Do not clear caches or use `--restart` for this correction.
+
 ## Evidence binding
 
 New observations receive an unnumbered list of source passages. The model returns

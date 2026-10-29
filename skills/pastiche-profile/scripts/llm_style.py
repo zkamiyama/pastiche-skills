@@ -313,7 +313,7 @@ def _check_sources(chosen: list[dict[str, Any]], reviewed: dict[str, list[str]],
             binding={"observation": observation, "chunk": chunk, "mechanism": label},
             prompt=prose.evidence_prompt(chunk, observation, label),
             parser=prose.evidence_verdict, cache_validator=prose.cached_evidence,
-            label=f"STYLE EVIDENCE {logical_id[0]}", retries=retries, on_request=counted)
+            label=f"STYLE EVIDENCE {logical_id[0]} observation={logical_id[1]}", retries=retries, on_request=counted)
         return {**verdict, "evidence_ids": list(observation["evidence_ids"])}
     answers, _jobs, cached = _run_tasks(requests, model, workers, call,
                                        reporter, "STYLE_EVIDENCE", store)

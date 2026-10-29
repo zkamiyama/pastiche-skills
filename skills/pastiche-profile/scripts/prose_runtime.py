@@ -48,8 +48,10 @@ def call_prose(model: Any, reporter: llm_runtime.ProgressReporter, *, kind: str,
         for attempt in range(1, retries + 2):
             actual_prompt = prompt
             if feedback:
-                actual_prompt += ('\nOUTPUT_REPAIR: ' + feedback + '. Re-examine the SAME '
-                    'bound task; return only the required prose/verdict fields. '
+                actual_prompt += ('\nOUTPUT_REPAIR: ' + json.dumps(feedback, sort_keys=True) + '. Re-examine the SAME '
+                    'bound task; correct the identified field using the stated type and '
+                    'inclusive character bounds, without changing a verdict just to pass validation. '
+                    'Return only the required prose/verdict fields. '
                     'Do not invent identifiers, quotations or successful results.')
             try:
                 if on_request: on_request()
@@ -57,15 +59,16 @@ def call_prose(model: Any, reporter: llm_runtime.ProgressReporter, *, kind: str,
                                     retries=0, record_status=False)
                 value = parser(raw)
             except llm_runtime.ModelRequestError as exc:
-                feedback = 'model_transport_or_json_error'
-                attempts.append({'attempt': attempt, 'outcome': 'model_error', 'code': feedback})
+                feedback = {'code': 'model_transport_or_json_error'}
+                attempts.append({'attempt': attempt, 'outcome': 'model_error', **feedback})
                 record('retrying' if attempt <= retries and exc.transient else 'failed')
                 if attempt > retries or not exc.transient: raise
                 if retry_delay: time.sleep(min(retry_delay * 2**(attempt-1), 8))
                 continue
             except contracts.ProseError as exc:
-                feedback = exc.code
-                attempts.append({'attempt': attempt, 'outcome': 'invalid', 'code': feedback})
+                feedback = exc.diagnostic()
+                attempts.append({'attempt': attempt, 'outcome': 'invalid', **feedback})
+                reporter.log(f'invalid {label}: ' + str(exc))
                 record('retrying' if attempt <= retries else 'failed')
                 if attempt > retries: raise
                 continue

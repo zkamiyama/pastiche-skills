@@ -32,6 +32,10 @@
 
 `STYLE_OBSERVE returned no valid evidence-grounded observations` では、説明の長さ・原文との一致・根拠IDなどの棄却理由を記録し、同じ検証基準のまま要求を再生成します。通信・JSON・観察検証を合わせて既定で最大3回です。診断は `<out>/style_observe_diagnostics/`。**成功済みキャッシュを維持し、`--restart` なしで再開**できます。全件棄却を空の成功に置き換えません。[復旧手順と診断コード](docs/STYLE_OBSERVE_RECOVERY.md)。
 
+## 原文再確認で `bounded_description_required` が出た場合
+
+補助説明 `reason` に未告知の300文字上限が適用される問題を修正しました。説明文は段落を含む自由記述として受け付け、根拠判定は従来どおり別に検証します。型・長さのエラーはフィールドと実測値を診断し、訂正要求へ渡します。今回の互換修正では完了済みキャッシュを再利用でき、`--restart` は不要です。[説明文の契約と再開](docs/PYTHON_OWNED_STYLE.md#explanatory-prose-is-not-a-compact-artifact-field)。
+
 ## 始め方
 
 ```bash
