@@ -1,0 +1,213 @@
+diff --git a/skills/pastiche-profile/scripts/llm_style_core.py b/skills/pastiche-profile/scripts/llm_style_core.py
+index ffde2edfa5420e79c929bbddb3ba9283bafc797a..b8cc826d51d24cc4438def4c32b4a3b78e735aa2 100644
+--- a/skills/pastiche-profile/scripts/llm_style_core.py
++++ b/skills/pastiche-profile/scripts/llm_style_core.py
+@@ -120,28 +120,70 @@ def cluster_prompt(dimension: str, panel: list[dict[str, Any]]) -> str:
+         + '],"label":"短い抽象的な共通手法"}]}. '
+ 
+         "Each group must have >=2 different supplied IDs. IDs must appear "
+-        "at most once across groups. No quotations or names. "
++        "at most once across groups. Copy IDs exactly from ITEMS_JSON; do not "
++        "invent, abbreviate, renumber, or repeat IDs. Omitted items remain "
++        "singletons: do not return single-member groups. Labels must be "
++        "Japanese strings of 4-140 characters, on one line with no leading "
++        "or trailing whitespace. No quotations or names. Empty groups is "
++        "valid only when no matching technique is found. "
+         f"Dimension={dimension}. ITEMS_JSON="
+         + json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
+     )
+ 
+ 
++class ClusterValidationError(ValueError):
++    """Safe, actionable diagnostics: never interpolate rejected model text."""
++    def __init__(self, code: str, group_index: int | None = None,
++                 member_index: int | None = None):
++        self.code = code
++        self.group_index = group_index
++        self.member_index = member_index
++        location = f"; group={group_index}" if group_index is not None else ""
++        if member_index is not None:
++            location += f"; member={member_index}"
++        super().__init__("STYLE_CLUSTER invented/duplicated IDs or invalid label: "
++                         + code + location)
++
++    def diagnostic(self) -> dict[str, Any]:
++        return {"code": self.code, "group_index": self.group_index,
++                "member_index": self.member_index}
++
++
+ def parse_clusters(raw: Any, allowed: set[str]) -> list[tuple[list[str], str]]:
++    """Validate a disjoint grouping without guessing, dropping or renaming IDs."""
+     if not isinstance(raw, dict) or not isinstance(raw.get("groups"), list):
+-        raise ValueError("STYLE_CLUSTER did not return a groups array")
++        raise ClusterValidationError("groups_array_required")
+     used: set[str] = set()
+     result: list[tuple[list[str], str]] = []
+-    for group in raw["groups"]:
++    for gi, group in enumerate(raw["groups"], 1):
+         if not isinstance(group, dict):
+-            raise ValueError("STYLE_CLUSTER returned a non-object group")
++            raise ClusterValidationError("group_object_required", gi)
+         ids, label = group.get("ids"), group.get("label")
+-        if (not isinstance(ids, list) or len(ids) < 2
+-                or not all(isinstance(v, str) and v in allowed for v in ids)
+-                or len(set(ids)) != len(ids) or set(ids) & used
+-                or not plain(label, maximum=140)):
+-            raise ValueError("STYLE_CLUSTER invented/duplicated IDs or invalid label")
+-        used.update(ids)
+-        result.append((ids, label))
++        if not isinstance(ids, list):
++            raise ClusterValidationError("ids_array_required", gi)
++        if len(ids) < 2:
++            raise ClusterValidationError("group_needs_two_ids", gi)
++        seen: set[str] = set()
++        for mi, member in enumerate(ids, 1):
++            if not isinstance(member, str):
++                raise ClusterValidationError("id_must_be_string", gi, mi)
++            if member not in allowed:
++                raise ClusterValidationError("unknown_id", gi, mi)
++            if member in seen:
++                raise ClusterValidationError("duplicate_within_group", gi, mi)
++            if member in used:
++                raise ClusterValidationError("duplicate_across_groups", gi, mi)
++            seen.add(member)
++        if not isinstance(label, str):
++            raise ClusterValidationError("label_must_be_string", gi)
++        if not 4 <= len(label) <= 140:
++            raise ClusterValidationError("label_length_4_to_140", gi)
++        if any(c in label for c in "\r\n"):
++            raise ClusterValidationError("label_must_be_single_line", gi)
++        if label != label.strip():
++            raise ClusterValidationError("label_outer_whitespace", gi)
++        used.update(seen)
++        result.append((list(ids), label))
+     return result
+ 
+ 
+diff --git a/skills/pastiche-profile/scripts/style_cluster_recovery.py b/skills/pastiche-profile/scripts/style_cluster_recovery.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..4b49b757b30d637ff30ddb7e9202d00dd9502fed
+--- /dev/null
++++ b/skills/pastiche-profile/scripts/style_cluster_recovery.py
+@@ -0,0 +1,121 @@
++"""Bounded cluster repair without weakening evidence or invalidating observations.
++
++Only fixed error codes and indices are persisted: no raw model answers, labels,
++source passages, deployment names or endpoints. Each retry is a complete new
++partition proposal, checked with the same strict validator as the first reply.
++"""
++from __future__ import annotations
++
++import json
++import time
++from typing import Any, Callable
++
++import llm_runtime
++import llm_style_core as core
++from task_transport import TasksPending
++
++CONTRACT_VERSION = "cluster-repair.v1"
++
++
++def repair_prompt(dimension: str, panel: list[dict[str, Any]],
++                  feedback: dict[str, Any] | None, attempt: int) -> str:
++    base = core.cluster_prompt(dimension, panel)
++    if feedback is None:
++        return base
++    # Insert before ITEMS_JSON so that the document still ends in its input
++    # array; never feed arbitrary rejected text back as corrective instructions.
++    prefix, data = base.split("ITEMS_JSON=", 1)
++    correction = (
++        f"OUTPUT_REPAIR={CONTRACT_VERSION}; request_attempt={attempt}. "
++        "Your previous reply failed the output contract. VALIDATION_ERROR="
++        + json.dumps(feedback, ensure_ascii=True, sort_keys=True)
++        + ". Regenerate the COMPLETE groups array from the supplied items. "
++        "Use only exact supplied IDs, each at most once in the entire reply. "
++        "Omit singletons; never force unrelated items into groups. Do not "
++        "drop a legitimate group just to hide a format error. Labels must "
++        "be 4-140 characters, single-line, without outer whitespace. "
++        "Do not return commentary, explanations or Markdown. ITEMS_JSON="
++    )
++    return prefix + correction + data
++
++
++def call_cluster(dimension: str, panel: list[dict[str, Any]], model: Any,
++                 reporter: llm_runtime.ProgressReporter, *, retries: int,
++                 round_number: int, panel_number: int,
++                 record_status: bool = True, retry_delay: float = 2.0,
++                 on_request: Callable[[], None] | None = None) -> dict:
++    """One shared (1 + retries) budget for transport and schema failures.
++
++    A subagent suspension does not consume attempts: replay consumes already
++    answered tasks, then emits the deterministically derived repair task.
++    Unknown IDs, overlapping membership and invalid labels never enter cache.
++    """
++    if type(retries) is not int or retries < 0:
++        raise ValueError("cluster retries must be a nonnegative integer")
++    if dimension not in core.DIMENSIONS or len(panel) < 2:
++        raise ValueError("invalid clustering panel")
++    allowed = {item["id"] for item in panel}
++    if len(allowed) != len(panel):
++        raise ValueError("duplicate input panel IDs")
++    fingerprint = core.digest("cluster", {"dimension": dimension, "panel": panel}, model)
++    diagnostic_path = reporter.out / "style_cluster_diagnostics" / f"{fingerprint}.json"
++    attempts: list[dict[str, Any]] = []
++    label = f"STYLE CLUSTER {dimension} round={round_number} panel={panel_number}"
++
++    def record(state: str) -> None:
++        llm_runtime.atomic_json_write(diagnostic_path, {
++            "schema": "pastiche.cluster.diagnostic.v1", "contract": CONTRACT_VERSION,
++            "dimension": dimension, "round": round_number, "panel": panel_number,
++            "panel_size": len(panel), "maximum_attempts": retries + 1,
++            "state": state, "attempts": attempts,
++            "note": "Latest invocation; subagent responses may be replayed. "
++                    "No source text, raw response, labels or deployment identifiers retained.",
++        })
++
++    feedback = None
++    record("running")
++    try:
++        for index in range(retries + 1):
++            attempt = index + 1
++            prompt = repair_prompt(dimension, panel, feedback, attempt)
++            try:
++                if on_request is not None:
++                    on_request()
++                raw = reporter.call(
++                    model, prompt, f"{label} request={attempt}/{retries + 1}",
++                    retries=0, record_status=record_status)
++            except llm_runtime.ModelRequestError as exc:
++                feedback = {"code": "model_transport_or_json_error"}
++                attempts.append({"attempt": attempt, "outcome": "model_error", **feedback})
++                record("retrying" if index < retries and exc.transient else "failed")
++                if index >= retries or not exc.transient:
++                    raise
++                reporter.log(f"retrying {label}: {feedback['code']}")
++                if retry_delay:
++                    time.sleep(min(retry_delay * (2 ** index), 30.0))
++                continue
++            try:
++                groups = core.parse_clusters(raw, allowed)
++            except core.ClusterValidationError as exc:
++                feedback = exc.diagnostic()
++                attempts.append({"attempt": attempt, "outcome": "invalid", **feedback})
++                reporter.log(f"invalid {label}: {exc.code}; "
++                             f"group={exc.group_index}; member={exc.member_index}")
++                record("retrying" if index < retries else "failed")
++                if index >= retries:
++                    reporter.log("Cluster recovery exhausted. Keep the checkpoint; rerun "
++                                 "without --restart. Diagnostics: style_cluster_diagnostics/")
++                    raise
++                reporter.log(f"repairing {label}: next request={attempt + 1}/{retries + 1}")
++                continue
++            attempts.append({"attempt": attempt, "outcome": "valid"})
++            record("completed")
++            reporter.log(f"validated {label}: groups={len(groups)}")
++            return {"groups": [{"ids": ids, "label": name} for ids, name in groups]}
++    except TasksPending:
++        record("waiting_for_tasks")
++        raise
++    except BaseException as exc:
++        record("interrupted" if isinstance(exc, KeyboardInterrupt) else "failed")
++        raise
++    raise AssertionError("unreachable cluster retry state")
