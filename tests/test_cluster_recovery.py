@@ -1,0 +1,286 @@
+"""Synthetic recovery regressions. No real corpus, deployment or endpoint."""
+from __future__ import annotations
+import copy
+from contextlib import redirect_stderr
+import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import io
+import itertools
+import json
+from pathlib import Path
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'skills/pastiche-profile/scripts'))
+import llm_runtime
+import llm_style
+import llm_style_core as core
+from style_cluster_recovery import call_cluster
+from task_transport import SubagentModel, TasksPending, list_tasks, submit
+from test_llm_style import FixtureModel
+
+
+def panel():
+    return [{'id': f'O{i:05d}', 'members': [f'O{i:05d}'], 'dimension': 'narrative',
+             'trigger': '変化を受け止める場面', 'technique': '応答の変化によって示す',
+             'effect': 'ためらいを間接的に伝える', 'label': ''} for i in range(1, 5)]
+
+
+def valid():
+    return {'groups': [{'ids': ['O00001', 'O00002'], 'label': '応答の変化を用いる'}]}
+
+
+class Replies:
+    backend = 'fixture'
+    model = 'fixture'
+    endpoint = 'fixture'
+    def __init__(self, replies):
+        self.replies = iter(replies)
+        self.prompts = []
+    def ask(self, prompt):
+        self.prompts.append(prompt)
+        reply = next(self.replies)
+        if isinstance(reply, BaseException):
+            raise reply
+        return copy.deepcopy(reply)
+
+
+class ClusterContractTests(unittest.TestCase):
+    def test_errors_are_specific_and_never_echo_untrusted_values(self):
+        cases = [
+            ([], 'groups_array_required'),
+            ({'groups': ['PRIVATE_UNTRUSTED']}, 'group_object_required'),
+            ({'groups': [{'ids': None, 'label': 'valid label'}]}, 'ids_array_required'),
+            ({'groups': [{'ids': ['O00001'], 'label': 'valid label'}]}, 'group_needs_two_ids'),
+            ({'groups': [{'ids': ['O00001', {}], 'label': 'valid label'}]}, 'id_must_be_string'),
+            ({'groups': [{'ids': ['O00001', 'PRIVATE_UNTRUSTED'], 'label': 'valid label'}]}, 'unknown_id'),
+            ({'groups': [{'ids': ['O00001', 'O00001'], 'label': 'valid label'}]}, 'duplicate_within_group'),
+            ({'groups': valid()['groups'] + [{'ids': ['O00002', 'O00003'], 'label': 'valid label'}]}, 'duplicate_across_groups'),
+        ]
+        for value, code in cases:
+            with self.subTest(code=code), self.assertRaises(core.ClusterValidationError) as cm:
+                core.parse_clusters(value, {n['id'] for n in panel()})
+            self.assertEqual(cm.exception.code, code)
+            self.assertNotIn('PRIVATE_UNTRUSTED', str(cm.exception))
+            self.assertNotIn('PRIVATE_UNTRUSTED', json.dumps(cm.exception.diagnostic()))
+
+    def test_label_boundaries_are_exact_and_prompt_declares_them(self):
+        for label, code in [(None, 'label_must_be_string'), ('短い語', 'label_length_4_to_140'),
+                            ('x'*141, 'label_length_4_to_140'), ('line\nbreak', 'label_must_be_single_line'),
+                            (' label', 'label_outer_whitespace')]:
+            reply = valid(); reply['groups'][0]['label'] = label
+            with self.subTest(label=label), self.assertRaises(core.ClusterValidationError) as cm:
+                core.parse_clusters(reply, {n['id'] for n in panel()})
+            self.assertEqual(cm.exception.code, code)
+        for label in ('四文字語', 'x'*140):
+            reply = valid(); reply['groups'][0]['label'] = label
+            self.assertEqual(core.parse_clusters(reply, {n['id'] for n in panel()})[0][1], label)
+        self.assertIn('4-140', core.cluster_prompt('narrative', panel()))
+
+    def test_exhaustive_small_id_partition_contract(self):
+        allowed = {'A', 'B', 'C', 'D'}
+        tested = 0
+        for seq in itertools.product(['A', 'B', 'C', 'D', 'UNKNOWN'], repeat=4):
+            reply = {'groups': [{'ids': list(seq[:2]), 'label': 'valid one'},
+                                {'ids': list(seq[2:]), 'label': 'valid two'}]}
+            expected = set(seq) <= allowed and len(set(seq)) == 4
+            try:
+                merges = core.parse_clusters(reply, allowed)
+            except core.ClusterValidationError:
+                self.assertFalse(expected, seq)
+            else:
+                self.assertTrue(expected, seq)
+                self.assertEqual(len({v for ids, _ in merges for v in ids}), 4)
+            tested += 1
+        self.assertEqual(tested, 625)
+
+    def test_empty_groups_and_omitted_singletons_preserve_every_member(self):
+        nodes = panel()
+        self.assertEqual(core.regroup(nodes, core.parse_clusters({'groups': []}, set())), nodes)
+        merged = core.regroup(nodes, core.parse_clusters(valid(), {n['id'] for n in nodes}))
+        flat = [oid for n in merged for oid in n['members']]
+        self.assertEqual(sorted(flat), sorted(n['id'] for n in nodes))
+        self.assertEqual(len(flat), len(set(flat)))
+
+    def test_observation_and_existing_cluster_keys_remain_compatible(self):
+        model = Replies([])
+        for stage, data in [('observe', [('W0001:S0001', '合成の文章です。')]),
+                            ('cluster', {'dimension': 'narrative', 'panel': panel()})]:
+            old = {'version': '1.0.1', 'stage': stage, 'data': data,
+                   'model': model.model, 'backend': model.backend, 'endpoint': model.endpoint}
+            expected = hashlib.sha256(json.dumps(old, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+            self.assertEqual(core.digest(stage, data, model), expected)
+
+
+class ClusterRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.out = Path(self.temp.name)
+        self.reporter = llm_runtime.ProgressReporter(self.out, interval=0)
+    def tearDown(self):
+        self.temp.cleanup()
+    def invoke(self, model, retries=2):
+        with redirect_stderr(io.StringIO()):
+            return call_cluster('narrative', panel(), model, self.reporter, retries=retries,
+                                round_number=1, panel_number=2, retry_delay=0)
+    def diagnostic(self):
+        files = list((self.out/'style_cluster_diagnostics').glob('*.json'))
+        self.assertEqual(len(files), 1)
+        return json.loads(files[0].read_text())
+
+    def test_invalid_reply_gets_specific_repair_then_succeeds(self):
+        bad = valid(); bad['groups'][0]['ids'][1] = 'O00001'
+        model = Replies([bad, valid()])
+        self.assertEqual(self.invoke(model), valid())
+        self.assertEqual(len(model.prompts), 2)
+        self.assertTrue(model.prompts[1].startswith('TASK=STYLE_CLUSTER.'))
+        self.assertIn('duplicate_within_group', model.prompts[1])
+        self.assertEqual(json.loads(model.prompts[1].split('ITEMS_JSON=', 1)[1])[0]['id'], 'O00001')
+        self.assertEqual(self.diagnostic()['state'], 'completed')
+        self.assertEqual([v['outcome'] for v in self.diagnostic()['attempts']], ['invalid', 'valid'])
+
+    def test_all_diagnostic_classes_can_be_repaired_without_relaxing_parser(self):
+        bads = [{'groups': [{'ids': ['O00001','O00001'], 'label': 'valid label'}]},
+                {'groups': valid()['groups'] + [{'ids': ['O00002','O00003'], 'label': 'valid label'}]},
+                {'groups': [{'ids': ['O00001','UNKNOWN'], 'label': 'valid label'}]},
+                {'groups': [{'ids': ['O00001','O00002'], 'label': 'short\nline'}]}]
+        for bad in bads:
+            with self.subTest(bad=bad):
+                self.assertEqual(self.invoke(Replies([bad, valid()])), valid())
+
+    def test_exhaustion_fails_without_silently_discarding_bad_groups(self):
+        bad = valid(); bad['groups'][0]['ids'][1] = 'UNKNOWN'
+        model = Replies([bad, bad, bad])
+        with self.assertRaises(core.ClusterValidationError):
+            self.invoke(model)
+        self.assertEqual(len(model.prompts), 3)
+        self.assertEqual(self.diagnostic()['state'], 'failed')
+        self.assertEqual(len(self.diagnostic()['attempts']), 3)
+        self.assertNotEqual(model.prompts[1], model.prompts[2])
+
+    def test_zero_retries_is_one_request(self):
+        model = Replies([{'groups': [None]}])
+        with self.assertRaises(core.ClusterValidationError):
+            self.invoke(model, retries=0)
+        self.assertEqual(len(model.prompts), 1)
+
+    def test_transport_and_schema_errors_share_one_budget(self):
+        model = Replies([llm_runtime.ModelRequestError('synthetic transport error'),
+                         {'groups': [None]}, valid()])
+        self.assertEqual(self.invoke(model), valid())
+        self.assertEqual(len(model.prompts), 3)
+        self.assertEqual([a['outcome'] for a in self.diagnostic()['attempts']],
+                         ['model_error', 'invalid', 'valid'])
+
+    def test_request_counter_includes_validation_repairs(self):
+        calls = []
+        model = Replies([{'groups': [None]}, valid()])
+        with redirect_stderr(io.StringIO()):
+            call_cluster('narrative', panel(), model, self.reporter, retries=2,
+                         round_number=1, panel_number=1,
+                         on_request=lambda: calls.append(1))
+        self.assertEqual(len(calls), 2)
+
+    def test_nonretryable_transport_error_is_not_hidden(self):
+        model = Replies([llm_runtime.ModelRequestError('PRIVATE_UNTRUSTED', transient=False)])
+        with self.assertRaises(llm_runtime.ModelRequestError):
+            self.invoke(model)
+        self.assertEqual(len(model.prompts), 1)
+        self.assertEqual(self.diagnostic()['state'], 'failed')
+        self.assertNotIn('PRIVATE_UNTRUSTED', json.dumps(self.diagnostic()))
+
+    def test_raw_rejected_reply_never_enters_diagnostics_or_feedback(self):
+        bad = valid(); bad['groups'][0]['ids'][1] = 'PRIVATE_UNTRUSTED'
+        model = Replies([bad, valid()])
+        self.invoke(model)
+        self.assertNotIn('PRIVATE_UNTRUSTED', model.prompts[1])
+        self.assertNotIn('PRIVATE_UNTRUSTED', json.dumps(self.diagnostic()))
+        self.assertNotIn('応答の変化', json.dumps(self.diagnostic(), ensure_ascii=False))
+
+    def test_empty_grouping_is_a_valid_result_not_a_transport_failure(self):
+        model = Replies([{'groups': []}])
+        self.assertEqual(self.invoke(model), {'groups': []})
+        self.assertEqual(len(model.prompts), 1)
+
+    def test_subagent_invalid_answer_produces_deterministic_repair_task(self):
+        queue = self.out/'queue'; model = SubagentModel(queue, 'fixture')
+        with self.assertRaises(TasksPending):
+            self.invoke(model)
+        first = list_tasks(queue)[0]['task_id']
+        submit(queue, first, {'groups': [None]})
+        with self.assertRaises(TasksPending):
+            self.invoke(model)
+        pending = [t['task_id'] for t in list_tasks(queue) if t['state'] == 'pending']
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(self.diagnostic()['state'], 'waiting_for_tasks')
+        with self.assertRaises(TasksPending):
+            self.invoke(model)
+        self.assertEqual(len(list_tasks(queue)), 2)
+        submit(queue, pending[0], valid())
+        self.assertEqual(self.invoke(model), valid())
+        self.assertEqual(self.diagnostic()['state'], 'completed')
+
+    def test_parallel_failure_still_checkpoints_inflight_success(self):
+        store = llm_runtime.CheckpointStore(self.out/'checkpoint.sqlite3')
+        started = threading.Event()
+        def task(payload, model, logical_id):
+            if payload == 'bad':
+                self.assertTrue(started.wait(3))
+                raise ValueError('synthetic rejection')
+            started.set(); time.sleep(0.05)
+            return {'ok': True}
+        jobs = [('bad', 'bad-key', 'bad', lambda v: v), ('good', 'good-key', 'good', lambda v: v)]
+        try:
+            with self.assertRaisesRegex(ValueError, 'synthetic rejection'):
+                llm_style._run_tasks(jobs, Replies([]), 2, task, self.reporter, 'TEST', store)
+            self.assertIsNone(store.get('bad-key'))
+            self.assertEqual(store.get('good-key'), {'value': {'ok': True}})
+        finally:
+            store.close()
+
+    def test_resume_from_old_observe_cache_skips_observation_model_calls(self):
+        corpus = self.out/'corpus'; corpus.mkdir()
+        for i in range(3):
+            (corpus/f'{i}.txt').write_text(('駅で友人は待っていた。返事は届かなかった。\n')*50, encoding='utf-8')
+        output = self.out/'analysis'
+        args = dict(analysis_works=0, chunks_per_work=1, chunk_chars=1800,
+                    verify_works=2, retries=0, progress_interval=0, llm_workers=2)
+        with redirect_stderr(io.StringIO()), self.assertRaises(core.ClusterValidationError):
+            llm_style.analyze(corpus, output, FixtureModel(invalid_groups=True), **args)
+        model = FixtureModel()
+        with redirect_stderr(io.StringIO()):
+            audit = llm_style.analyze(corpus, output, model, **args)
+        self.assertEqual(audit['actual_llm_calls_this_run']['observations'], 0)
+        self.assertFalse(any('STYLE_OBSERVE' in call for call in model.calls))
+        self.assertGreater(audit['restored_checkpoint_entries']['observations'], 0)
+
+    def test_local_http_invalid_json_object_then_repaired_cluster(self):
+        seen = []
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                request = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                seen.append(request['messages'][-1]['content'])
+                result = {'groups': [None]} if len(seen) == 1 else valid()
+                raw = json.dumps({'choices': [{'message': {'content': json.dumps(result)},
+                                               'finish_reason': 'stop'}]}).encode()
+                self.send_response(200); self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(raw))); self.end_headers(); self.wfile.write(raw)
+            def log_message(self, *args): pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        try:
+            model = llm_runtime.HTTPModel('openai-compatible', 'fixture',
+                f'http://127.0.0.1:{server.server_address[1]}/v1/chat/completions', stream=False)
+            self.assertEqual(self.invoke(model), valid())
+            self.assertEqual(len(seen), 2)
+        finally:
+            server.shutdown(); server.server_close(); thread.join()
+
+
+if __name__ == '__main__':
+    unittest.main()
