@@ -138,6 +138,10 @@ class SelectionTests(unittest.TestCase):
 
 
 class MeasurementTests(unittest.TestCase):
+    def test_empty_shortlist_does_not_read_the_corpus(self):
+        with patch.object(context,'input_files',side_effect=AssertionError('unnecessary corpus read')):
+            self.assertEqual(context.collect(Path('/not/read'),[],object()),{})
+
     def test_reference_signal_reaches_cli_shortlist(self):
         class Tagger:
             def __call__(self,text):

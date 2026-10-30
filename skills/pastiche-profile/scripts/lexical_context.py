@@ -16,6 +16,7 @@ def collect(corpus: Path, rows: list[dict], tagger, limit: int = 3) -> dict[str,
     not anonymity guarantees. Known proper names/URLs are masked in memory.
     """
     if limit < 1: raise ValueError('invalid context limit')
+    if not rows: return {}
     slots = {r['id']: [] for r in rows}
     lemma_lookup = {}; exact_lookup = {}
     for row in rows:
