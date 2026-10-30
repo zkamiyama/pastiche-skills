@@ -33,8 +33,8 @@ def main(argv=None):
                         help="skip first-run Japanese dictionary setup; full vocabulary may be unavailable")
     parser.add_argument("--reference",type=Path,help="genre-matched reference TXT corpus for descriptive lexical contrast")
     parser.add_argument("--include-words-in-guide",action="store_true",help="also include frequent short lexical forms in private guide")
-    parser.add_argument("--lexical-review-limit",type=int,default=96,
-                        help="model-judged typicality candidates (default 96, 0=all qualifying; can be very slow)")
+    parser.add_argument("--lexical-review-limit",type=int,default=-1,
+                        help="lexical review budget: -1=adaptive diverse selection, 0=all eligible; positive=explicit cap")
     parser.add_argument("--lexical-batch-size",type=int,default=24)
     parser.add_argument("--no-lexical-review",action="store_true",
                         help="skip model language-impression review; exact statistics still run")
@@ -54,7 +54,7 @@ def main(argv=None):
         if args.mode == 'llm' and not args.skip_story and (not 4 <= args.story_fanout <= 32
                 or args.story_panel_size < 2 or args.story_rounds < 1):
             raise ValueError('invalid story analysis limits')
-        if args.lexical_review_limit < 0 or not 1 <= args.lexical_batch_size <= 48:
+        if args.lexical_review_limit < -1 or not 1 <= args.lexical_batch_size <= 48:
             raise ValueError('invalid lexical review limits')
         if args.check:
             execution.model_from(args).ask('Return JSON only: {"ok":true}. Synthetic connection check.')

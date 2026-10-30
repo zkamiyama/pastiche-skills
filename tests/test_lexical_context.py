@@ -13,13 +13,13 @@ import vocabulary as v
 from test_guide_quality import word,SequenceTagger,assessment,pattern
 
 class ContextTests(unittest.TestCase):
-    def test_names_masked_and_two_distinct_documents_sampled(self):
+    def test_names_masked_and_duplicate_contexts_collapsed(self):
         with tempfile.TemporaryDirectory() as td:
             root=Path(td)
             for i in range(3):(root/f'{i}.txt').write_text('太郎はねっとりした糊を混ぜた。',encoding='utf-8')
             tag=SequenceTagger([word('太郎',sub='固有名詞'),word('は','助詞'),word('ねっとり','副詞',base='ねっとり')])
             result=lc.collect(root,[{'id':'L0001','form':'ねっとり','kind':'lemma','primary_pos':'副詞'}],tag)
-            self.assertEqual(len(result['L0001']),2)
+            self.assertEqual(len(result['L0001']),1)
             self.assertTrue(all('太郎' not in s and '［固有名詞］' in s for s in result['L0001']))
 
     def test_long_quote_is_not_an_abstract_explanation(self):

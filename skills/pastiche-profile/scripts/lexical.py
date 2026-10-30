@@ -15,6 +15,7 @@ import math
 from pathlib import Path
 import re
 import sys
+import lexical_discovery
 from typing import Any, Iterator
 
 from pastiche import compact, input_files, read_text
@@ -377,11 +378,12 @@ def lexical_candidates(profile: dict[str,Any],limit:int=96) -> list[dict[str,Any
     return ordered[:limit] if limit else ordered
 
 
-def interpretation_candidates(profile:dict[str,Any], limit:int=128)->list[dict[str,Any]]:
+def interpretation_candidates(profile:dict[str,Any], limit:int=-1)->list[dict[str,Any]]:
     """Meaningful vocabulary only; symbols stay in deterministic typography."""
-    if limit<0: raise ValueError("candidate limit must be >= 0")
+    if limit < -1: raise ValueError("candidate limit must be -1, 0 or positive")
     if "vocabulary_units" in profile:
-        return vocabulary_candidates(profile["vocabulary_units"],limit)
+        return lexical_discovery.select(profile["vocabulary_units"],limit)[0]
+    if limit == -1: limit = 128
     # Old inventories lack inflection metadata: never promote clipped stems.
     candidates=[];seen=set()
     for row in lexical_candidates(profile,limit=0):
@@ -456,11 +458,11 @@ def main(argv:list[str]|None=None)->int:
     parser.add_argument("--min-chars",type=int,default=80)
     parser.add_argument("--include-words-in-guide",action="store_true",help="export frequent short tokens into private lexical guide")
     parser.add_argument("--inventory-limit",type=int,default=0,help="0=ALL morphological word forms in private inventory; positive limits rows")
-    parser.add_argument("--candidate-limit",type=int,default=96,help="max forms for optional LLM impression review; 0=all eligible (slow)")
+    parser.add_argument("--candidate-limit",type=int,default=-1,help="-1=adaptive diverse triage (up to 384), 0=all eligible, positive=explicit review budget")
     args=parser.parse_args(argv)
     try:
-        if args.min_chars<1 or args.inventory_limit<0 or args.candidate_limit<0:
-            raise ValueError("--min-chars positive; --inventory-limit/--candidate-limit >= 0")
+        if args.min_chars<1 or args.inventory_limit<0 or args.candidate_limit < -1:
+            raise ValueError("--min-chars positive; --inventory-limit >= 0, --candidate-limit >= -1")
         pairs=select_pairs(args.variants)
         tagger=morph_tagger(args.morphology)
         stats=collect(args.corpus,pairs,tagger,args.min_chars,retain_internal=True)
@@ -468,11 +470,15 @@ def main(argv:list[str]|None=None)->int:
             reference=collect(args.reference,pairs,tagger,args.min_chars,retain_internal=True)
             stats["distinctive_words"] = keyness(stats,reference)
             stats["reference_works"] = reference["works"]
+            stats["vocabulary_units"] = lexical_discovery.contrast(
+                stats["vocabulary_units"], reference["vocabulary_units"],
+                stats["total_characters"], reference["total_characters"])
             stats["distinctiveness_note"] = "log2 relative frequency with additive smoothing; no significance claim"
         else:
             stats["distinctive_words"] = []
             stats["distinctiveness_note"] = "needs --reference and fugashi; frequency alone is not distinctiveness"
-        shortlist = interpretation_candidates(stats,limit=args.candidate_limit)
+        shortlist, selection_audit, selection_decisions = lexical_discovery.select(
+            stats["vocabulary_units"], args.candidate_limit)
         inventory = make_inventory(stats)
         if args.inventory_limit:
             inventory = inventory[:args.inventory_limit]
@@ -492,10 +498,15 @@ def main(argv:list[str]|None=None)->int:
             with (out/"lexical_vocabulary.jsonl").open("w",encoding="utf-8") as f:
                 for row in units:f.write(json.dumps(row,ensure_ascii=False)+"\n")
         else:(out/"lexical_vocabulary.jsonl").unlink(missing_ok=True)
+        stats["vocabulary_discovery"] = selection_audit
+        json_write(out/"lexical_discovery_audit.json",selection_audit)
+        with (out/"lexical_selection.jsonl").open("w",encoding="utf-8") as f:
+            for row in selection_decisions:f.write(json.dumps(row,ensure_ascii=False)+"\n")
         json_write(out/"lexical_profile.json",stats)
         json_write(out/"lexical_candidates.json",{
             "schema":"pastiche.lexical.candidates.v2", "all_forms_examined":stats["full_inventory_entries"],
             "candidate_count":len(shortlist), "reference_available":bool(args.reference),
+            "discovery_audit":selection_audit,
             "note":"All token forms stored privately; short-form ranking is a triage step, not a distinctiveness verdict.",
             "candidates":shortlist})
         if tagger:

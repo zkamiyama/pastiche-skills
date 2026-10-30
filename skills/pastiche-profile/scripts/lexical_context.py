@@ -1,43 +1,58 @@
-"""Transient concordances for sense disambiguation; never persisted as passages."""
+"""Transient, deterministic multi-work contexts; no passages in persistent caches."""
 from __future__ import annotations
+import hashlib
 import re
 from pathlib import Path
 from pastiche import input_files, read_text
 from vocabulary import located_tokens, feature
 
-VERSION='contextual-lexical.v1'
+VERSION = 'contextual-lexical.v2'
 
 
-def collect(corpus: Path, rows: list[dict], tagger, limit: int=2) -> dict[str,list[str]]:
-    if limit<1:raise ValueError('invalid context limit')
-    result={r['id']:[] for r in rows}; lookup={}
-    for row in rows:lookup.setdefault((row['form'],row.get('primary_pos','')),[]).append(row)
-    expressions=[row for row in rows if row.get('kind')=='expression']
+def collect(corpus: Path, rows: list[dict], tagger, limit: int = 3) -> dict[str, list[str]]:
+    """Hash-ranked reservoir across the whole corpus, max one context per work.
+
+    This avoids always judging the first two files. Hashes are for selection,
+    not anonymity guarantees. Known proper names/URLs are masked in memory.
+    """
+    if limit < 1: raise ValueError('invalid context limit')
+    slots = {r['id']: [] for r in rows}
+    lemma_lookup = {}; exact_lookup = {}
+    for row in rows:
+        if row.get('kind') == 'lemma':
+            lemma_lookup.setdefault((row['form'], row.get('primary_pos','')), []).append(row)
+        elif row.get('kind') in {'expression','surface'}:
+            exact_lookup.setdefault(row['form'][0], []).append(row)
     for path in input_files(corpus):
-        if all(len(v)>=limit for v in result.values()):break
-        text=read_text(path);seen=set()
-        for piece,tokens in located_tokens(text,tagger):
-            proper=[str(t.surface) for t,_,_ in tokens if feature(t,'pos2')=='固有名詞']
-            def add(row,a,b):
-                key=row['id']
-                if key in seen or len(result[key])>=limit:return
-                snippet=piece[max(0,a-28):min(len(piece),b+28)]
-                for name in sorted(set(proper),key=len,reverse=True):snippet=snippet.replace(name,'［固有名詞］')
-                snippet=re.sub(r'https?://\S+','［URL］',snippet)
-                result[key].append(snippet);seen.add(key)
+        text = read_text(path); local = {}
+        work_digest = hashlib.sha256(text.encode('utf-8')).hexdigest()
+        for piece, tokens in located_tokens(text, tagger):
+            proper = [str(t.surface) for t,_,_ in tokens
+                      if '固有名詞' in (feature(t,'pos2'), feature(t,'pos3'))]
+            def add(row, a, b):
+                snippet = piece[max(0,a-36):min(len(piece),b+36)]
+                for name in sorted(set(proper), key=len, reverse=True):
+                    snippet = snippet.replace(name, '［固有名詞］')
+                snippet = re.sub(r'https?://\S+', '［URL］', snippet)
+                rank = hashlib.sha256((row['form']+'\0'+work_digest+'\0'+snippet).encode('utf-8')).hexdigest()
+                key = row['id']
+                if key not in local or rank < local[key][0]:local[key] = (rank, snippet)
+            ends = {b for _,_,b in tokens}
             for token,a,b in tokens:
-                base=feature(token,'orthBase') or str(token.surface)
-                for row in lookup.get((base,feature(token,'pos1')),[]):
-                    if row.get('kind')=='lemma':add(row,a,b)
-            starts={a for _,a,_ in tokens};ends={b for _,_,b in tokens}
-            for row in expressions:
-                if row['id'] in seen or len(result[row['id']])>=limit:continue
-                start=piece.find(row['form'])
-                if start in starts and start+len(row['form']) in ends:add(row,start,start+len(row['form']))
-    return result
+                base = feature(token,'orthBase') or str(token.surface)
+                for row in lemma_lookup.get((base,feature(token,'pos1')),[]):add(row,a,b)
+                for row in exact_lookup.get(piece[a],[]):
+                    end = a+len(row['form'])
+                    if end in ends and piece.startswith(row['form'], a):add(row,a,end)
+        for key, (rank, snippet) in local.items():
+            # Exact duplicate texts/contexts do not pretend to add independent evidence.
+            if any(work_digest==d or snippet==s for _,d,s in slots[key]):continue
+            slots[key].append((rank,work_digest,snippet))
+            slots[key] = sorted(slots[key])[:limit]
+    return {key:[snippet for _,_,snippet in value] for key,value in slots.items()}
 
 
-def no_long_quote(note: str, contexts: list[str], width: int=24) -> bool:
-    note=''.join(note.split())
+def no_long_quote(note: str, contexts: list[str], width: int = 24) -> bool:
+    note = ''.join(note.split())
     return not any(note[i:i+width] in ''.join(source.split())
                    for i in range(max(0,len(note)-width+1)) for source in contexts)

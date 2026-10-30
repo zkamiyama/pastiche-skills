@@ -323,7 +323,7 @@ def lexical_prompt(row: dict) -> str:
     return ('TASK=LEXICAL_IMPRESSION_PROSE. ' + RULES + explanation_instruction('note') +
         'Judge this ONE short observed form using general Japanese-language intuition, '
         'not measured population rarity or author uniqueness. Explain the useful meaning, register or writing function of the WHOLE word or phrase in note, not a generic statement about rarity. Do not invent quotations, scenes or corpus examples. Use topic_bound for vocabulary that only identifies the subject. The input counts '
-        'describe only this corpus. Keep topic-specific terms distinct from stylistic '
+        'describe only this corpus. Briefly explain how and when this exact expression changes tone, texture or rhythm, and when it would be inappropriate; avoid a generic dictionary gloss. Keep topic-specific terms distinct from stylistic '
         'devices. Use uncertain/unclear when needed. Python attaches the form and ID. '
         'JSON {"typicality":"ordinary|marked|unusual|uncertain",'
         '"role":"colloquial|dialect|sound_symbolism|emphasis|emotion|orthography|'

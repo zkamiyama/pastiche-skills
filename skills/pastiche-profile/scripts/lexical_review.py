@@ -19,7 +19,8 @@ from pathlib import Path
 import sys
 import threading
 import prose_contracts as prose
-from prose_runtime import call_prose
+import lexical_repertoire
+from prose_runtime import call_prose, load_cached_prose, fingerprint
 from typing import Any
 
 from llm_runtime import CheckpointStore, ProgressReporter, ModelRequestError, atomic_json_write, model_jobs, reasoning_cache_parameters
@@ -94,6 +95,15 @@ def batch_fingerprint(rows:list[dict[str,Any]], model:Any)->str:
     return hashlib.sha256(json.dumps(material,ensure_ascii=False,sort_keys=True).encode('utf-8')).hexdigest()
 
 
+def lexical_binding(row: dict) -> dict:
+    """Review identity excludes shortlist position and ranking-only changes."""
+    if row.get('selection_version') != 'lexical-discovery.v2':return row
+    keys=('kind','form','primary_pos','count','work_count','count_basis',
+          'observed_forms','context_digest','context_contract','context_count')
+    return {'contract':'contextual-lexical-review.v2',
+            **{k:row[k] for k in keys if k in row}}
+
+
 def style_signal(row:dict[str,Any])->float:
     # A *ranking heuristic*. It is not a calibrated statistical estimate.
     weight={'unusual':2,'marked':1,'ordinary':0,'uncertain':-1}[row['typicality']]
@@ -105,6 +115,8 @@ def style_signal(row:dict[str,Any])->float:
 
 def guide_rows(judgments:dict[str,Any], limit:int=28)->list[dict]:
     """Never let typography, duplicate representations or stems fill word slots."""
+    if any(r.get('selection_version')=='lexical-discovery.v2' for r in judgments['assessments']):
+        return lexical_repertoire.useful_rows(judgments,limit)
     qualified=[]; seen=set(); roles=Counter()
     for row in sorted(judgments['assessments'],key=lambda x:(-x.get('style_signal',0),-x['work_count'],-x['count'],x['form'])):
         form=row['form']; kind=row.get('kind','')
@@ -160,7 +172,7 @@ def assess(candidate_file:Path,out:Path,model:Any,*,batch_size:int=24,retries:in
         if tagger:
             contexts=lexical_context.collect(corpus,items,tagger)
             items=[dict(row,context_digest=hashlib.sha256(prose.data(contexts.get(row['id'],[])).encode()).hexdigest(),
-                        context_contract=lexical_context.VERSION) for row in items]
+                        context_contract=lexical_context.VERSION, context_count=len(contexts.get(row["id"],[]))) for row in items]
     if not 1<=batch_size<=48:
         raise ValueError('--batch-size must be 1..48')
     if llm_workers<1:
@@ -202,12 +214,16 @@ def assess(candidate_file:Path,out:Path,model:Any,*,batch_size:int=24,retries:in
             clean=[]
             for row in rows:
                 context=contexts.get(row['id'],[])
+                if row.get('selection_version')=='lexical-discovery.v2' and not context:
+                    clean.append({'id':row['id'],'typicality':'uncertain','role':'unclear',
+                                  'confidence':'low','note':'文脈を取得できないため保留。'})
+                    continue
                 prompt=prose.lexical_prompt(row)
                 if context:
                     prompt += ('\nUse these transient observed contexts to select the actual sense. '
                         'Do not invent a dictionary definition unrelated to these uses. '
                         'If tokenization or the headword is misleading, use uncertain/unclear/low. '
-                        'Explain the expression abstractly; do not quote the context. CONTEXT=' + prose.data(context))
+                        'Explain the scene conditions, register and contrast with a more generic expression, not just a dictionary definition. Do not invent synonym equivalence. Treat unknown or unusual orthography as a candidate, not proof of uniqueness. Preserve the attested spelling in writing. Do not quote the contexts. CONTEXT=' + prose.data(context))
                 def parse(raw):
                     value=prose.parse_lexical(raw)
                     if context:
@@ -215,10 +231,22 @@ def assess(candidate_file:Path,out:Path,model:Any,*,batch_size:int=24,retries:in
                         if not lexical_context.no_long_quote(value['note'],context):
                             raise prose.ProseError('lexical_explanation_source_overlap')
                     return value
-                value=call_prose(worker_model,reporter,kind='lexical-form',binding=row,
-                    prompt=prompt,parser=parse,
-                    label=f'LEXICAL REVIEW {batch_no}/{len(batches)}',
-                    retries=retries,on_request=counted)
+                binding=lexical_binding(row)
+                # Validated transition caches can be promoted without another model call.
+                value=load_cached_prose(worker_model,reporter,kind='lexical-form',
+                                        binding=binding,parser=parse,retries=retries)
+                if value is None and binding != row:
+                    value=load_cached_prose(worker_model,reporter,kind='lexical-form',
+                                            binding=row,parser=parse,retries=retries)
+                    if value is not None:
+                        key=fingerprint('lexical-form',binding,worker_model)
+                        atomic_json_write(out/'style_binding_cache'/(key+'.json'),
+                            {'contract':prose.VERSION,'binding_sha256':key,'value':value})
+                if value is None:
+                    value=call_prose(worker_model,reporter,kind='lexical-form',binding=binding,
+                        prompt=prompt,parser=parse,
+                        label=f'LEXICAL REVIEW {batch_no}/{len(batches)}',
+                        retries=retries,on_request=counted)
                 clean.append({'id':row['id'], **{k:value[k] for k in ('typicality','role','confidence','note')}})
             return clean
 
@@ -236,12 +264,12 @@ def assess(candidate_file:Path,out:Path,model:Any,*,batch_size:int=24,retries:in
             by_id={r['id']:r for r in rows}
             for item in assessed_by_batch[batch_no]:
                 entry=by_id[item['id']]
-                value={k:entry[k] for k in ('id','kind','form','count','work_count','primary_pos','observed_forms','count_basis','selection_version') if k in entry}
+                value={k:entry[k] for k in ('id','kind','form','count','work_count','primary_pos','observed_forms','count_basis','selection_version','context_count','discovery_lane','discovery_reasons','nonstandard_signals','dispersion_dp','max_work_share','evidence_scope','reference_count','reference_work_count','reference_log2_ratio') if k in entry}
                 value.update(item)
                 value['style_signal']=style_signal(value)
                 collected.append(value)
 
-        result={'schema':SCHEMA,'method':'model intuitive general-language judgment of short forms',
+        result={'schema':SCHEMA,'method':'contextual lexical judgment after deterministic discovery triage',
                 'assessments':collected,'candidate_count':len(items),
                 'reviewed_count':len(collected),'uncertain_count':sum(x['typicality']=='uncertain' for x in collected),
                 'model_backend':model.backend,'model_name':model.model,
@@ -251,6 +279,10 @@ def assess(candidate_file:Path,out:Path,model:Any,*,batch_size:int=24,retries:in
                  'context_storage':'passages are transient; only hashes and abstract notes retained',
                 'total_batches':len(batches),'actual_model_calls_this_run':actual_calls,
                 'restored_batches':cached}
+        result['discovery_audit']=obj.get('discovery_audit',{})
+        repertoire=lexical_repertoire.build(result,obj.get('discovery_audit',{}))
+        result['repertoire_entries']=repertoire['eligible_entries']
+        atomic_json_write(out/'lexical_repertoire.json',repertoire)
         atomic_json_write(out/'lexical_judgments.json',result)
         (out/'lexical_interpretation.md').write_text(make_guide(result),encoding='utf-8')
         reporter.status(state='completed',stage='LEXICAL_REVIEW_DONE')
