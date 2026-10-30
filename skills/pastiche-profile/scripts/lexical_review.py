@@ -119,33 +119,27 @@ def guide_rows(judgments:dict[str,Any], limit:int=28)->list[dict]:
     return qualified
 
 
-def make_guide(judgments:dict[str,Any])->str:
-    lines=['# Lexical impressions — model-assisted (private)', '',
-        '語の出現数はコーパスの実測、用法の説明はモデルの推定です。比較コーパスなしで作者固有性・一般的な珍しさは断定しません。',
-        '記号・連打は上の表記統計に分離し、この欄には見出し語と実在する連語を載せます。',
-        '基本形の回数は活用形を合算した値であり、その見出し表記が原文に同じ回数出たという意味ではありません。', '',
-        '## 語彙・連語の選び方（実測＋用法の説明）', '']
-    rows=guide_rows(judgments)
+def make_guide(judgments: dict[str, Any]) -> str:
+    """Condensed lexical preference hints; full notes and counts live in JSON."""
+    lines = ["# Lexical impressions — model-assisted (private)", "",
+             "## 語彙・連語（回数/作品。基本形は活用形合算）", ""]
+    rows = guide_rows(judgments)
     for row in rows:
-        form=json.dumps(row['form'],ensure_ascii=False)
-        basis='基本形で集約' if row.get('count_basis')=='orthographic_base' else '原文に連続して出た表記' if row.get('count_basis')=='exact_contiguous_span' else '表記の実測'
-        lines.append(f'- **{form}** — {row.get("primary_pos") or row["role"]}。{basis}: {row["count"]}回／{row["work_count"]}作品。')
-        if row.get('note'):
-            note=' '.join(row['note'].splitlines())
-            if len(note)>1200:note=note[:1200]+'…（表示を省略。全文はlexical_judgments.json）'
-            lines.append('  - 用法（モデル推定）: '+note)
-        else:
-            lines.append(f'  - 用法ラベル（旧キャッシュのmodel impression）: {row["role"]}。説明文は未取得。')
-        forms=row.get('observed_forms',[])
-        if forms and any(v['form']!=row['form'] for v in forms):
-            lines.append('  - 実際の表記: '+ '、'.join(json.dumps(v['form'],ensure_ascii=False)+f'（{v["count"]}回）' for v in forms[:4]))
-    if not rows:lines.append('用法を説明できる反復語彙は未取得です。記号や切れた活用形で補いません。')
-    lines+=['','## 解釈の限界','',
-        '- 品詞の均等配分と複数作品での反復は候補選別であり、独自性の証明ではありません。',
-        '- 連語は実在する連続文字列です。形態素を空白で継ぎ合わせた架空の表記は使いません。',
-        '- 頻度を執筆時の強制使用回数にしないでください。語の役割は文脈によって変わります。']
-    return '\n'.join(lines)+'\n'
-
+        form = json.dumps(row["form"], ensure_ascii=False)
+        note = " ".join(str(row.get("note") or "").split())
+        if len(note) > 180:
+            note = note[:179].rstrip() + "…"
+        if not note:
+            note = row.get("role", "")
+        entry = f"- {form} {row['count']}/{row['work_count']}: {note}"
+        forms = row.get("observed_forms", [])
+        if forms and any(v["form"] != row["form"] for v in forms):
+            surface = ", ".join(f"{v['form']} {v['count']}" for v in forms[:3])
+            entry += f"〔実形: {surface}〕"
+        lines.append(entry)
+    if not rows:
+        lines.append("反復して使われる語彙の情報はありません。")
+    return "\n".join(lines).rstrip() + "\n
 
 def assess(candidate_file:Path,out:Path,model:Any,*,batch_size:int=24,retries:int=2,
            progress_interval:float=15.0,restart:bool=False,llm_workers:int=1,

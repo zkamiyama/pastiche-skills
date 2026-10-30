@@ -147,8 +147,8 @@ class IllustrationTests(unittest.TestCase):
         p=pattern();s=[{'dimension':'pacing','summary':'短文を連続させる技法です','writing_use':'新しい場面で短文の間隔を選ぶ','pattern_ids':['P0001']}]
         examples={'origin':'synthetic_illustration_not_source_evidence','patterns':[{'pattern_id':'P0001','examples':[{'status':'available','text':'時計が止まった。指を伸ばす。針が、動いた。'}]}]}
         guide=llm_style.qualitative_guide([p],total_works=4,sampled_works=4,chunks=8,synthesis=s,illustrations=examples)
-        self.assertIn('説明例1（新規作成）',guide);self.assertIn('少なくとも3作品',guide)
-        self.assertIn('根拠そのものでもありません',guide);self.assertNotIn('根拠: P0001',guide)
+        self.assertIn('  例: ',guide);self.assertNotIn('少なくとも3作品',guide)
+        self.assertNotIn('根拠: P0001',guide);self.assertNotIn('（新規作成）',guide)
         self.assertNotIn('P0001',guide)
 
     def test_source_overlap_is_rejected_before_caching(self):

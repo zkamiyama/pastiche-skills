@@ -243,41 +243,40 @@ def safe_profile(profile: dict[str, Any]) -> dict[str, Any]:
 
 
 def drafting_guide(profile: dict[str, Any], notes: dict[str, Any] | None = None) -> str:
+    """One global scope note, then concise measurements and mechanisms."""
     m = profile["metrics"]
     def value(key: str, field: str = "median") -> float:
         return m[key][field]
     lines = ["# Style Bible — quantitative profile (offline)", "",
-             "> These measurements are descriptive, not semantic claims. Do not insert reference passages or mimic copyrighted plot/characters.",
-             f"> Corpus: {profile['works']} works / {profile['total_characters']} non-whitespace characters. Reliability: {profile['confidence']}.", "",
-             "## Reproducible surface-level targets (soft, not word-for-word constraints)", "",
-             f"- Sentence median across works: {value('p50_sentence_chars'):.1f} characters (between-work IQR {value('p50_sentence_chars','p25'):.1f}–{value('p50_sentence_chars','p75'):.1f}); preserve variation.",
-             f"- Long sentence (P90) typical: {value('p90_sentence_chars'):.1f} characters, not a hard upper bound.",
-             f"- Quoted dialogue character share: {value('dialogue_char_ratio'):.1%} (rough Japanese quote heuristic).",
-             f"- Commas: {value('comma_per_1000_chars'):.1f}/1000 chars; ellipses: {value('ellipsis_per_1000_chars'):.1f}/1000 chars.",
-             f"- Newlines: {value('newline_per_1000_chars'):.1f}/1000 chars; question sentences: {value('question_sentence_ratio'):.1%}.",
-             "",
-             "## Positional evidence (opening 20%, middle 60%, ending 20% by sentence count)", ""]
-    for key, label in (("opening", "Opening"), ("middle", "Middle"), ("ending", "Ending")):
+             "> 数値は実測、表現技法と語の用法はモデル推定、例文は新規生成。"
+             " 人手検証・作者固有性は未保証。原文・人物・設定を転用しない。頻度は目安。",
+             f"> {profile['works']}作品 / {profile['total_characters']}字", "",
+             "## 文長・会話・表記", "",
+             f"- 文長中央値 {value('p50_sentence_chars'):.1f}字"
+             f"（作品間IQR {value('p50_sentence_chars','p25'):.1f}–{value('p50_sentence_chars','p75'):.1f}）、"
+             f"長文P90 {value('p90_sentence_chars'):.1f}字",
+             f"- 会話文字率 {value('dialogue_char_ratio'):.1%}、"
+             f"疑問文率 {value('question_sentence_ratio'):.1%}",
+             f"- 1000字当たり: 読点 {value('comma_per_1000_chars'):.1f}、"
+             f"三点リーダ {value('ellipsis_per_1000_chars'):.1f}、"
+             f"改行 {value('newline_per_1000_chars'):.1f}", ""]
+    phase_lines = []
+    for key, label in (("opening", "冒頭"), ("middle", "中盤"), ("ending", "末尾")):
         item = profile.get("phase_medians", {}).get(key)
         if item:
-            lines.append(f"- {label}: sentence median {item['p50_sentence_chars']:.1f} chars, dialogue {item['dialogue_char_ratio']:.1%}; contrast marker {item['contrast_per_100_sentences']:.2f}/100 sentences.")
-    lines += ["", "## What the instrument CANNOT infer", "",
-              "- These marker counts do not establish motive, ideology, causality, arc shape, or preferred genre.",
-              "- Do not infer hidden narrative rules from numbers; require separate verified notes.",
-              "- Do not copy unique phrases, passages, plot beats, character identities, or settings.", ""]
-    rules = (notes or {}).get("rules", [])
-    accepted = [r for r in rules if is_guide_eligible(r)]
-    lines += ["## Narrative mechanisms — provenance required", "",
-              "These are optional, not copyable plot templates. `model_supported` denotes automated model agreement and recurrent corpus coding; it is NOT independent verification or author-specificity.", ""]
-    if accepted:
-        for r in accepted:
-            support = (f"; {r.get('support_work_count')} independent TXT works, model-double-checked"
-                       if r.get('status') == 'model_supported' else '; manually verified')
-            lines.append(f"- IF {r.get('trigger', 'unspecified')}; THEN {r['mechanism']}; EXPECT {r.get('effect', 'unspecified')}{support}.")
-    else:
-        lines.append("No validated narrative mechanisms supplied. Do not infer causal laws from punctuation statistics.")
-    return "\n".join(lines) + "\n"
-
+            phase_lines.append(f"- {label}: 文長 {item['p50_sentence_chars']:.1f}字、"
+                               f"会話 {item['dialogue_char_ratio']:.1%}、"
+                               f"転換 {item['contrast_per_100_sentences']:.2f}/100文")
+    if phase_lines:
+        lines.extend(["## 位置別", "", *phase_lines, ""])
+    rules = [r for r in (notes or {}).get("rules", []) if is_guide_eligible(r)]
+    if rules:
+        lines.extend(["## 物語構造", ""])
+        for rule in rules:
+            lines.append(f"- {rule.get('trigger', '')} → {rule['mechanism']}"
+                         f"（効果: {rule.get('effect', '')}）")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n
 
 def template_notes() -> dict[str, Any]:
     return {"schema": "pastiche.narrative.v1", "rules": [],

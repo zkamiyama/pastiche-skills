@@ -242,7 +242,7 @@ class LlmStyleTests(unittest.TestCase):
         self.assertEqual(audit["cross_work_candidate_groups"], 0)
         self.assertEqual(audit["verified_groups"], 0)
         guide = (self.out / "qualitative_bible.md").read_text()
-        self.assertIn("未検証の仮説を執筆指示に転用しない", guide)
+        self.assertIn("検証済みの表現技法はありません", guide)
         self.assertTrue(all(x["status"] == "hypothesis" for x in
                             json.loads((self.out / "qualitative_patterns.json").read_text())["patterns"]))
 

@@ -421,65 +421,56 @@ def qualitative_guide(patterns: list[dict[str, Any]], *,
                       synthesis: list[dict[str, Any]] | None = None,
                       max_per_dimension: int = 6,
                       illustrations: dict[str, Any] | None = None) -> str:
-    lines = [
-        "# Qualitative Style Bible — LLM-assisted (private)", "",
-        f"> Sampled {sampled_works}/{total_works} works and {chunks} chunks.",
-        "> These are repeat observations in the sampled material, NOT author-specific",
-        "> traits, ground truth, a frequency estimate for the complete corpus or",
-        "> permission to copy source wording. Model review is not human validation.",
-        "> Use as optional techniques for unrelated characters and new plots.", "",
-    ]
-    if synthesis:
-        lines += ["## LLMによる横断的な作風のまとめ", ""]
-        supported = {p['pattern_id']:p for p in patterns if p['status']=='model_supported'}
-        examples = {}
-        if illustrations and illustrations.get('origin')=='synthetic_illustration_not_source_evidence':
-            examples={r['pattern_id']:r['examples'] for r in illustrations.get('patterns',[])}
-        lines += ["説明例は固有の人物・設定を使わず新規作成したものです。原文の匿名化引用でも、分析の根拠そのものでもありません。追跡用IDと原文への対応はJSONに保持しています。", ""]
-        for section in synthesis:
-            ids=section.get('pattern_ids',[])
-            if not ids or any(pid not in supported for pid in ids):continue
-            lines.append(f"- {JAPANESE_LABELS[section['dimension']]}: {section['summary']}")
-            lines.append(f"  - 執筆時の応用: {section['writing_use']}")
-            count=min(supported[pid]['support_work_count'] for pid in ids)
-            lines.append(f"  - 裏付け: 少なくとも{count}作品の原文をモデルが再確認。人間の検証・作者固有性の証明ではありません。")
-            shown=0
-            for pid in ids:
-                for example in examples.get(pid,[]):
-                    if example.get('status')!='available':continue
-                    shown+=1
-                    text=' '.join(str(example['text']).splitlines())
-                    lines.append(f"  - 説明例{shown}（新規作成）: {text}")
-            if not shown:lines.append("  - 説明例: 未生成、または文脈依存性・出力検査により省略。")
-        lines.append("")
-    any_supported = False
-    for dimension in core.DIMENSIONS:
-        rows = [r for r in patterns if r["dimension"] == dimension
-                and r["status"] == "model_supported"]
-        if not rows:
+    """A single readable entry per supported technique; metadata stays in JSON."""
+    lines = ["# Qualitative Style Bible — LLM-assisted (private)", "",
+             "## LLMによる横断的な作風のまとめ", ""]
+    supported = {p["pattern_id"]: p for p in patterns
+                 if p["status"] == "model_supported"}
+    examples: dict[str, list[dict[str, Any]]] = {}
+    if illustrations and illustrations.get("origin") == "synthetic_illustration_not_source_evidence":
+        examples = {r["pattern_id"]: r["examples"]
+                    for r in illustrations.get("patterns", [])}
+    summarized: set[str] = set()
+    by_dimension: dict[str, list[tuple[dict[str, Any], list[str]]]] = {
+        dimension: [] for dimension in core.DIMENSIONS}
+    for section in synthesis or []:
+        ids = section.get("pattern_ids", [])
+        dimension = section.get("dimension")
+        if (not ids or dimension not in by_dimension
+                or any(pid not in supported for pid in ids)):
             continue
-        any_supported = True
-        lines += [f"## {JAPANESE_LABELS[dimension]}", ""]
-        for row in rows[:max_per_dimension]:
-            lines.append(
-                f"- 場面条件: {row['trigger']} / 表現方法: {row['mechanism']} "
-                f"/ 推定効果: {row['effect']} "
-                f"({row['support_work_count']}作品の原文をモデルが再確認)")
-            if dimension == "lexicon" and row["anchors"]:
-                lines.append("- 複数作品で観測された短い表記: "
-                             + "、".join(json.dumps(a, ensure_ascii=False)
-                                          for a in row["anchors"]))
-        lines.append("")
-    if not any_supported:
-        lines += ["複数作品で根拠を再検証できた定性的な特徴はありません。"
-                  "未検証の仮説を執筆指示に転用しないでください。", ""]
-    lines += ["## 解釈の限界", "",
-              "- 感情・読者への効果はモデルによる推定で、読者実験ではない。",
-              "- 共通ジャンル、類似作品、作者の異なる作品の混入を区別していない。",
-              "- 実測頻度は style_profile.json と lexical_profile.json を参照する。",
-              "- 題材・人物・固有の台詞や文章の長い連続を再利用しない。", ""]
-    return "\n".join(lines)
+        summarized.update(ids)
+        by_dimension[dimension].append((section, ids))
 
+    def add_examples(ids: list[str]) -> None:
+        for pid in ids:
+            for item in examples.get(pid, []):
+                if item.get("status") == "available":
+                    lines.append("  例: " + " ".join(str(item["text"]).splitlines()))
+                    break  # one illustration per pattern in the AI-facing Bible
+
+    for dimension in core.DIMENSIONS:
+        entries = by_dimension[dimension]
+        # Preserve techniques lacking a summary instead of silently omitting them.
+        missing = [p for p in patterns if p["status"] == "model_supported"
+                   and p["dimension"] == dimension
+                   and p["pattern_id"] not in summarized][:max_per_dimension]
+        if not entries and not missing:
+            continue
+        lines.extend([f"### {JAPANESE_LABELS[dimension]}", ""])
+        for section, ids in entries:
+            lines.append("- " + section["summary"].strip())
+            writing_use = section.get("writing_use", "").strip()
+            if writing_use and writing_use != section["summary"].strip():
+                lines.append("  応用: " + writing_use)
+            add_examples(ids)
+        for p in missing:
+            lines.append(f"- {p['mechanism']}／条件: {p['trigger']}／効果: {p['effect']}")
+            add_examples([p["pattern_id"]])
+        lines.append("")
+    if not supported:
+        lines.append("検証済みの表現技法はありません。")
+    return "\n".join(lines).rstrip() + "\n
 
 def analyze(corpus: Path, out: Path, model: Any, *,
             analysis_works: int = 0, chunks_per_work: int = 2,

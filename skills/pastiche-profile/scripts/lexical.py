@@ -419,26 +419,25 @@ def keyness(profile: dict[str,Any], ref: dict[str,Any], top: int = 50) -> list[d
     return sorted(out,key=lambda x:(-x["log2_relative_frequency"],-x["target_work_count"],-x["target_count"]))[:top]
 
 
-def private_guide(profile:dict[str,Any], include_words:bool=False) -> str:
-    lines=["# Lexical / Orthographic Profile (local analysis)","",
-           "This document contains exact short forms and should be reviewed before use with a remote model.",
-           "Treat frequencies as preferences, not mandatory repetition quotas. Do not reproduce source passages.","",
-           "## Exact typography and symbols"]
-    for item in profile.get("symbols",[])[:20]:
-        lines.append(f"- `{item['form']}`: {item['count']} uses in {item['work_count']}/{profile['works']} works; dialogue={item['contexts']['dialogue']}, terminal={item['contexts']['terminal']}.")
-    lines.append("\n## Repeated marks")
-    for item in profile.get("symbol_runs",[])[:20]:
-        lines.append(f"- `{item['symbol']}` × {item['repetitions']}: {item['count']} runs across {item['work_count']} works")
-    lines.append("\n## Observed exact variants")
-    for pair in profile.get("variant_pairs",[]):
-        if sum(pair["counts"]):
-            lines.append(f"- `{pair['variants'][0]}` vs `{pair['variants'][1]}`: {pair['counts'][0]} / {pair['counts'][1]} occurrences; document frequency {pair['work_counts'][0]} / {pair['work_counts'][1]}.")
+def private_guide(profile: dict[str, Any], include_words: bool = False) -> str:
+    """Compact orthographic statistics; methodological details remain in JSON."""
+    lines = ["# Lexical / Orthographic Profile (local analysis)", "",
+             "## 記号（出現/作品）", ""]
+    for row in profile.get("symbols", [])[:16]:
+        lines.append(f"- {row['form']!r} {row['count']}/{row['work_count']}")
+    lines.extend(["", "## 連打（記号×回数: 出現/作品）", ""])
+    for row in profile.get("symbol_runs", [])[:14]:
+        lines.append(f"- {row['symbol']!r}×{row['repetitions']} {row['count']}/{row['work_count']}")
+    pairs = [p for p in profile.get("variant_pairs", []) if sum(p["counts"])][:14]
+    if pairs:
+        lines.extend(["", "## 表記差（左/右の出現）", ""])
+        for pair in pairs:
+            lines.append(f"- {pair['variants'][0]!r} / {pair['variants'][1]!r}: {pair['counts'][0]}/{pair['counts'][1]}")
     if include_words and profile.get("words"):
-        lines.append("\n## Frequent short lexical forms (optional; contextual use only)")
-        for row in profile["words"][:25]:
-            lines.append(f"- `{row['form']}`: {row['count']} instances, {row['work_count']} works")
-    return "\n".join(lines)+"\n"
-
+        lines.extend(["", "## 頻出語（回/作品）", ""])
+        for row in profile["words"][:20]:
+            lines.append(f"- {row['form']!r} {row['count']}/{row['work_count']}")
+    return "\n".join(lines).rstrip() + "\n
 
 def json_write(out:Path, data:dict[str,Any]) -> None:
     out.parent.mkdir(parents=True,exist_ok=True)
