@@ -85,8 +85,9 @@ are preserved. Classification and literary interpretation still can be wrong.
 lexical_repertoire.json retains all context-screened useful lexical cards, not only
 the small Bible shortlist. Low-confidence, topic-only and unclear judgments are
 not promoted. It records the exact spelling, observed inflections, usage note,
-discovery lane and evidence scope. The Bible stays concise; detailed ranking and
-provenance remain in JSON.
+discovery lane and evidence scope. The Bible displays at most 16 representative entries with 110-character usage
+previews; full notes, inflections, ranking and provenance remain in JSON. A
+preview ending in an ellipsis is truncated for display, not a rewritten judgment.
 
 pastiche-write/scripts/lexical_palette.py retrieves up to 16 cards for a scene brief
 using character n-gram overlap and role cues, with role diversity. It is an offline

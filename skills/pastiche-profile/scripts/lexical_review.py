@@ -135,17 +135,19 @@ def make_guide(judgments: dict[str, Any]) -> str:
     """Condensed lexical preference hints; full notes and counts live in JSON."""
     lines = ["# Lexical impressions — model-assisted (private)", "",
              "## 語彙・連語（回数/作品。基本形は活用形合算）", ""]
-    rows = guide_rows(judgments)
+    compact_discovery = any(r.get('selection_version') == 'lexical-discovery.v2' for r in judgments['assessments'])
+    rows = guide_rows(judgments, 16 if compact_discovery else 28)
     for row in rows:
         form = json.dumps(row["form"], ensure_ascii=False)
         note = " ".join(str(row.get("note") or "").split())
-        if len(note) > 180:
-            note = note[:179].rstrip() + "…"
+        note_limit = 110 if compact_discovery else 180
+        if len(note) > note_limit:
+            note = note[:note_limit-1].rstrip() + "…"
         if not note:
             note = row.get("role", "")
         entry = f"- {form} {row['count']}/{row['work_count']}: {note}"
         forms = row.get("observed_forms", [])
-        if forms and any(v["form"] != row["form"] for v in forms):
+        if not compact_discovery and forms and any(v["form"] != row["form"] for v in forms):
             surface = ", ".join(f"{v['form']} {v['count']}" for v in forms[:3])
             entry += f"〔実形: {surface}〕"
         lines.append(entry)

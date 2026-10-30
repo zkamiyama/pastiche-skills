@@ -216,6 +216,15 @@ class MeasurementTests(unittest.TestCase):
 
 
 class WriterTests(unittest.TestCase):
+    def test_bible_preview_stays_small_while_repertoire_retains_full_notes(self):
+        rows=[judged(form='語彙'+str(i),note='説明文'*100) for i in range(30)]
+        guide=review.make_guide({'assessments':rows})
+        self.assertEqual(sum(line.startswith('- ') for line in guide.splitlines()),16)
+        self.assertIn('…',guide)
+        repertoire=rep.build({'assessments':rows})
+        self.assertEqual(repertoire['eligible_entries'],30)
+        self.assertEqual(repertoire['entries'][0]['note'],'説明文'*100)
+
     def test_contextual_cards_preserve_exact_spelling(self):
         data=rep.build({'assessments':[judged(form='トロットロ')],'reviewed_count':1})
         self.assertEqual(data['entries'][0]['preferred_surface'],'トロットロ')
