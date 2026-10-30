@@ -437,7 +437,7 @@ def private_guide(profile: dict[str, Any], include_words: bool = False) -> str:
         lines.extend(["", "## 頻出語（回/作品）", ""])
         for row in profile["words"][:20]:
             lines.append(f"- {row['form']!r} {row['count']}/{row['work_count']}")
-    return "\n".join(lines).rstrip() + "\n
+    return "\n".join(lines).rstrip() + "\n"
 
 def json_write(out:Path, data:dict[str,Any]) -> None:
     out.parent.mkdir(parents=True,exist_ok=True)

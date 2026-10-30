@@ -139,7 +139,7 @@ def make_guide(judgments: dict[str, Any]) -> str:
         lines.append(entry)
     if not rows:
         lines.append("反復して使われる語彙の情報はありません。")
-    return "\n".join(lines).rstrip() + "\n
+    return "\n".join(lines).rstrip() + "\n"
 
 def assess(candidate_file:Path,out:Path,model:Any,*,batch_size:int=24,retries:int=2,
            progress_interval:float=15.0,restart:bool=False,llm_workers:int=1,

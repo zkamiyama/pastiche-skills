@@ -276,7 +276,7 @@ def drafting_guide(profile: dict[str, Any], notes: dict[str, Any] | None = None)
             lines.append(f"- {rule.get('trigger', '')} → {rule['mechanism']}"
                          f"（効果: {rule.get('effect', '')}）")
         lines.append("")
-    return "\n".join(lines).rstrip() + "\n
+    return "\n".join(lines).rstrip() + "\n"
 
 def template_notes() -> dict[str, Any]:
     return {"schema": "pastiche.narrative.v1", "rules": [],

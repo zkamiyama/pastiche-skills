@@ -470,7 +470,7 @@ def qualitative_guide(patterns: list[dict[str, Any]], *,
         lines.append("")
     if not supported:
         lines.append("検証済みの表現技法はありません。")
-    return "\n".join(lines).rstrip() + "\n
+    return "\n".join(lines).rstrip() + "\n"
 
 def analyze(corpus: Path, out: Path, model: Any, *,
             analysis_works: int = 0, chunks_per_work: int = 2,
