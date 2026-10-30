@@ -162,14 +162,14 @@ class ScopedParserTests(unittest.TestCase):
             try:
                 m = Model(True)
                 result, calls, cached = llm_style._check_sources(
-                    chosen, reviewed, observations, chunks, m, store,
+                    chosen, reviewed, observations, chunks, m, store, reporter,
                     2, 0, 2, 4)
                 self.assertEqual(result, {"G": list(observations)})
                 self.assertEqual(calls, 2)
                 self.assertEqual(cached, 0)
                 second = Model(False)
                 again, calls, cached = llm_style._check_sources(
-                    chosen, reviewed, observations, chunks, second, store,
+                    chosen, reviewed, observations, chunks, second, store, reporter,
                     2, 0, 2, 4)
                 self.assertEqual(again, result)
                 self.assertEqual(calls, 0)
