@@ -84,6 +84,24 @@ python3 ../pastiche-profile/scripts/workbench.py plan --out /private/profile \
 - 第二稿では、意味を変えずに文長、台詞の自然さ、文末と語彙・表記の選好を調整する。
 - **強調記号や珍しい語を大量に追加して「作者らしさ」を演出しない。** テーマ・話者・場面との不整合が出るなら見送る。
 
+### 4a. Lexical edit — 特徴語の提案・局所改稿
+
+`lexical_repertoire.json`がある場合、第一稿の場面ごとに`scripts/lexical_edit.py`
+で語彙の使いどころを検討する。`--mode suggest`は提案、`--mode revise`は挿入・置換案を
+比較して別ファイルへ保存する。本文と短い語彙カードのみを渡し、原文は取得しない。
+
+```bash
+python3 scripts/lexical_edit.py --repertoire /private/profile/lexical_repertoire.json \
+  --brief /private/brief.txt --draft /private/scene.txt --out /private/lexical-edits \
+  --mode revise --api-base http://model-server.example/llm/v1 --model MODEL_ID \
+  --reasoning-effort none --llm-workers 4 --max-output-tokens 4096
+```
+
+場面・話者・元の事実に合わない語は見送る。全体置換や使用数ノルマは禁止。
+`status.json`の完了と`result.json.state=accepted_by_model`を確認してから
+`selected.txt`を採用し、通常の文体・人物・世界設定監査へ進む。候補稿を採用済みと
+誤認しない。コマンド未対応時は、ホストLLMが同じ手順を明示的に行い、スクリプトを
+実行したと報告しない。詳細は[語彙の局所改稿](references/LEXICAL_EDIT.md)。
 ### 5. Local audit — 新しく書いた文章をローカルで測る
 
 実行でき、利用者が原稿を保存した場合、まず **このSkill自身の標準ライブラリ製評価スクリプト**を使う。
