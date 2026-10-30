@@ -206,3 +206,7 @@ python3 skills/pastiche-profile/scripts/workbench.py export \
 未完了の執筆用要約はLLMが平文だけを生成し、Pythonが項目名とパターン参照を付与します。
 `summary` / `writing_use` の転記やJSONキー生成は要求しません。既存の成功キャッシュは維持し、
 新規の文章は項目ごとに再開できます。詳細は [平文要約](docs/PLAIN_TEXT_SYNTHESIS.md)。
+
+## 読めるBibleと語彙の改善
+
+括弧文の顔文字抽出は廃止しました。語彙候補は基本形と実在する連語に分け、表記・記号統計とは混ぜません。短い用例を参照した用法説明と、根拠とは区別した新規の説明例を付けます。本文の匿名ID表示は作品数の説明に置き換え、追跡用IDはJSONに保持します。[仕様と限界](docs/GUIDE_QUALITY.md)。

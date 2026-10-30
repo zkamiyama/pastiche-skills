@@ -292,7 +292,7 @@ def cached_synthesis_text(raw: Any, field: str) -> dict:
 def lexical_prompt(row: dict) -> str:
     return ('TASK=LEXICAL_IMPRESSION_PROSE. ' + RULES + explanation_instruction('note') +
         'Judge this ONE short observed form using general Japanese-language intuition, '
-        'not measured population rarity or author uniqueness. The input counts '
+        'not measured population rarity or author uniqueness. Explain the useful meaning, register or writing function of the WHOLE word or phrase in note, not a generic statement about rarity. Do not invent quotations, scenes or corpus examples. Use topic_bound for vocabulary that only identifies the subject. The input counts '
         'describe only this corpus. Keep topic-specific terms distinct from stylistic '
         'devices. Use uncertain/unclear when needed. Python attaches the form and ID. '
         'JSON {"typicality":"ordinary|marked|unusual|uncertain",'
@@ -300,7 +300,9 @@ def lexical_prompt(row: dict) -> str:
         'discourse|sensory|figurative|topic_bound|general_word|unclear",'
         '"confidence":"low|medium|high","note":"short Japanese explanation"}.\nFORM='
         + data({'form': row['form'], 'kind': row['kind'], 'uses': row['count'],
-                'works': row['work_count'], 'part_of_speech': row.get('primary_pos', '')}))
+                'works': row['work_count'], 'part_of_speech': row.get('primary_pos', ''),
+                'count_basis':row.get('count_basis','exact_surface'),
+                'observed_forms':row.get('observed_forms',[])}))
 
 def parse_lexical(raw: Any) -> dict:
     import lexical_review

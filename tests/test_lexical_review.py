@@ -52,7 +52,7 @@ class LexicalReviewTests(unittest.TestCase):
         self.assertEqual(result['actual_model_calls_this_run'],5)
         self.assertEqual(result['restored_batches'],0)
         self.assertEqual(result['assessments'][0]['typicality'],'marked')
-        self.assertIn('model impression', (self.out/'lexical_interpretation.md').read_text(encoding='utf-8'))
+        self.assertIn('用法（モデル推定）', (self.out/'lexical_interpretation.md').read_text(encoding='utf-8'))
         for prompt in model.calls:
             self.assertIn('general Japanese-language intuition',prompt)
             self.assertNotRegex(prompt, r'L[0-9]{4}')

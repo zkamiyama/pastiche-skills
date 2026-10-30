@@ -44,11 +44,12 @@ def main(argv=None):
     parser.add_argument("--story-panel-size", type=int, default=12)
     parser.add_argument("--story-rounds", type=int, default=3)
     parser.add_argument("--restart", action="store_true")
+    parser.add_argument("--examples-per-pattern",type=int,default=2,help="new neutral illustrations per supported pattern; 0 disables")
     parser.add_argument("--check", action="store_true", help="synthetic API check only, without reading corpus")
     execution.add_model_flags(parser)
     args = parser.parse_args(argv)
     try:
-        if args.llm_workers < 1 or args.retries < 0:
+        if args.llm_workers < 1 or args.retries < 0 or not 0 <= args.examples_per_pattern <= 4:
             raise ValueError('invalid concurrency/retry limits')
         if args.mode == 'llm' and not args.skip_story and (not 4 <= args.story_fanout <= 32
                 or args.story_panel_size < 2 or args.story_rounds < 1):
@@ -82,7 +83,7 @@ def main(argv=None):
         review_ok = False
         if args.mode == 'llm':
             if not args.no_lexical_review:
-                code = invoke('lexical_review.py', ['--candidates', args.out/'lexical_candidates.json', '--out', args.out, '--batch-size', args.lexical_batch_size, *flags])
+                code = invoke('lexical_review.py', ['--candidates', args.out/'lexical_candidates.json', '--corpus', args.corpus, '--out', args.out, '--batch-size', args.lexical_batch_size, *flags])
                 if code == TasksPending.exit_code: return stop(code)
                 review_ok = code == 0
                 if code: print('Lexical model impressions unavailable; deterministic measurements remain.', file=sys.stderr)
@@ -98,6 +99,10 @@ def main(argv=None):
                     '--analysis-works', args.analysis_works, '--story-fanout', args.story_fanout,
                     '--story-panel-size', args.story_panel_size, '--story-rounds', args.story_rounds, *flags])
                 if code: return stop(code)
+        if args.mode == 'llm':
+            code = invoke('guide_examples.py', ['--profile', args.out, '--corpus', args.corpus,
+                '--examples-per-pattern', args.examples_per_pattern, *execution.forwarding_args(args)])
+            if code: return stop(code)
         guide = ['guide', '--profile', args.out/'style_profile.json', '--lexical', args.out/'lexical_bible.md',
                  '--out', args.out/'style_bible.md']
         if args.mode == 'llm':

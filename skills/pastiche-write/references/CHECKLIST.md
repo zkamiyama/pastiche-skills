@@ -14,7 +14,7 @@ The following is a private checklist for an agent, not output to include in ever
 1. First pass — logical storyline and character motivation; avoid recognizable source scenes or long phrases.
 2. Second pass — adjust sentence rhythm, dialogue share, punctuation and paragraphing within natural ranges.
 3. Third pass — apply measured exact-form preferences only at genuine *opportunities*: a character's idiolect, expressive dialogue ending, sensory description, etc. Symbol and lexical targets are not quotas. `marked/unusual` is a model impression, not measured general-language rarity.
-4. Audit — read `write_lexical_review.json` if `scripts/evaluate_lexical.py` was run. Compare `variant_pairs`, `symbols`, `symbol_runs`, `mixed_sequences`, `kaomoji_candidates`, `sentence_endings`; prioritize contextual mistakes over ratio differences. Values labeled `insufficient_comparable_occurrences` should not prompt edits.
+4. Audit — read `write_lexical_review.json` if `scripts/evaluate_lexical.py` was run. Compare `variant_pairs`, `symbols`, `symbol_runs`, `mixed_sequences`, `sentence_endings`; prioritize contextual mistakes over ratio differences. Values labeled `insufficient_comparable_occurrences` should not prompt edits.
 5. Keep entity knowledge, chronology, spatial continuity, cause/effect, voice, content and originality intact. A short story may appropriately contain zero instances of a profile's signature symbol.
 
 For long texts, outline → scene blocks with state notes → continuity revision → style pass. This operationalizes aspects of Re3 (Yang et al., 2022), DOC (Yang et al., 2023), and related work; it does not reproduce their models.

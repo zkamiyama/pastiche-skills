@@ -18,6 +18,7 @@ import sys
 from typing import Any, Iterator
 
 from pastiche import compact, input_files, read_text
+from vocabulary import Vocabulary, candidates as vocabulary_candidates
 
 SCHEMA = "pastiche.lexical.v1"
 SYMBOLS = "♡♥❤💕💖♪♫♬☆★※！!？?…〜～ー"  # Distinct glyphs must remain distinct.
@@ -31,10 +32,6 @@ DEFAULT_PAIRS = (
     ("！！", "!!"),
     ("……", "・・・"),
 )
-# Deliberately conservative; arbitrary parenthetical prose is not a kaomoji.
-PARENTHETICAL = re.compile(r"[（(][^\n()（）]{2,32}[)）]")
-FACE_MARKERS = set("ω∀Д▽＾^´｀¬ಠ◕ツT_T≧≦ﾉノヽ∩益ﾟ°˘﹏￣")
-# A slash or a middle dot alone is insufficient evidence of a kaomoji.
 SENTENCE_END = re.compile(r"[^。！？!?\n]+[。！？!?]+[」』]?|[^。！？!?\n]+$")
 SENTENCE_PUNCT = "。！？!?」』\r\n "
 SYMBOL_SET = set(SYMBOLS)
@@ -133,16 +130,7 @@ def mixed_sign_sequences(text: str) -> Counter[str]:
     return counter
 
 
-def kaomoji(text: str) -> Counter[str]:
-    found = Counter()
-    for match in PARENTHETICAL.finditer(text):
-        sample = match.group()
-        inside = sample[1:-1]
-        if (any(c in FACE_MARKERS for c in inside)
-                and not any(c in "\n。！？" for c in inside)
-                and not re.search(r"(?i)https?://|(?:user|illust|twitter)/", inside)):
-            found[sample] += 1
-    return found
+
 
 
 def endings(text: str) -> Counter[str]:
@@ -227,8 +215,6 @@ def collect(corpus: Path, pairs: list[tuple[str,str]], tagger: Any, min_chars: i
     run_docs: Counter[tuple[str,int]] = Counter()
     mixed: Counter[str] = Counter()
     mixed_docs: Counter[str] = Counter()
-    emoticons: Counter[str] = Counter()
-    emoticon_docs: Counter[str] = Counter()
     ending_counts: Counter[str] = Counter()
     ending_docs: Counter[str] = Counter()
     form_counts: Counter[str] = Counter()
@@ -239,6 +225,7 @@ def collect(corpus: Path, pairs: list[tuple[str,str]], tagger: Any, min_chars: i
     collocations: Counter[str] = Counter()
     collocation_docs: Counter[str] = Counter()
     total_tokens = 0
+    vocabulary = Vocabulary(tagger) if tagger else None
     token_pos: dict[str, Counter[str]] = defaultdict(Counter)
     skipped = Counter()
     alternatives = sorted({form for pair in pairs for form in pair}, key=lambda x:(-len(x),x))
@@ -271,9 +258,6 @@ def collect(corpus: Path, pairs: list[tuple[str,str]], tagger: Any, min_chars: i
         this_mixed = mixed_sign_sequences(text)
         mixed.update(this_mixed)
         mixed_docs.update(this_mixed.keys())
-        this_emoticons = kaomoji(text)
-        emoticons.update(this_emoticons)
-        emoticon_docs.update(this_emoticons.keys())
         this_endings = endings(text)
         ending_counts.update(this_endings)
         ending_docs.update(this_endings.keys())
@@ -296,6 +280,7 @@ def collect(corpus: Path, pairs: list[tuple[str,str]], tagger: Any, min_chars: i
             collocations.update(coll)
             collocation_docs.update(coll.keys())
             total_tokens += tok
+            vocabulary.add(text)
     if not works:
         raise ValueError("no qualifying corpus TXT files")
     variants = []
@@ -324,14 +309,14 @@ def collect(corpus: Path, pairs: list[tuple[str,str]], tagger: Any, min_chars: i
         "symbols":symbol_rows,
         "symbol_runs":run_rows,
         "mixed_sequences":rank(mixed,mixed_docs,works,total,limit=60,min_count=2),
-        "kaomoji_candidates":rank(emoticons,emoticon_docs,works,total,limit=60,min_count=1),
         "variant_pairs":variants,
         "sentence_endings":rank(ending_counts,ending_docs,works,total,limit=60,min_count=2),
         "words":rank(token_counts,token_docs,works,total,limit=80,min_count=2) if tagger else [],
         "collocations":rank(collocations,collocation_docs,works,total,limit=60,min_count=3) if tagger else [],
         "token_total":total_tokens,
+        "vocabulary_units": vocabulary.rows(works) if vocabulary else [],
+        "vocabulary_note": "Inflections grouped by orthBase; expressions are exact contiguous spans. Raw surface inventory is unchanged.",
         "limits": ["short exact forms and possible lexical content occur in this PRIVATE file",
-                   "kaomoji detection uses a heuristic and can have false positives",
                    "work counts do not prove author-specific usage",
                    "word counts require optional fugashi; morphological segmentation is imperfect"],
     }
@@ -382,7 +367,7 @@ def lexical_candidates(profile: dict[str,Any],limit:int=96) -> list[dict[str,Any
             continue
         cross=min(row["work_count"],5)
         # Distinctive features often combine *recurrence* and nonstandard forms.
-        expressive=bool(re.search(r"[っッぁぃぅぇぉャュョー～〜!?！？♡♪☆]",form))
+        expressive=False  # Small kana are not evidence of stylistic importance.
         key=keyness_rows.get(form)
         score=(cross*2 + min(row["count"],20)/10 + (2 if expressive else 0)
                + (min(max(key["log2_relative_frequency"],0),6)*2 if key else 0))
@@ -393,49 +378,19 @@ def lexical_candidates(profile: dict[str,Any],limit:int=96) -> list[dict[str,Any
 
 
 def interpretation_candidates(profile:dict[str,Any], limit:int=128)->list[dict[str,Any]]:
-    """Create a compact, diverse model input from the *full* local inventory.
-
-    The model gets short lexical forms, not source passages. The entire inventory
-    remains on disk. A zero limit deliberately selects all eligible forms and can
-    require many slow requests, so this is NOT the default.
-    """
-    if limit<0:
-        raise ValueError("candidate limit must be >= 0")
-    candidates=[]
-    seen=set()
-    def insert(kind:str,form:str,count:int,work_count:int,primary_pos:str="",score:float=0.0):
-        key=(kind,form)
-        if not form or key in seen or len(form)>40 or count<1:
-            return
-        seen.add(key)
-        candidates.append({"kind":kind,"form":form,"count":int(count),
-                           "work_count":int(work_count),"primary_pos":primary_pos,
-                           "selection_score":round(float(score),3)})
-
-    # Reserve slots for every expression family. Otherwise a frequent-token
-    # ranking can drown out distinctive symbols, endings and colloquial variants.
-    for row in profile.get("variant_pairs",[])[:10]:
-        for i,form in enumerate(row["variants"]):
-            insert("variant",form,row["counts"][i],row["work_counts"][i],score=30)
-    for row in profile.get("symbol_runs",[])[:8]:
-        insert("symbol_run",row["symbol"]*row["repetitions"],row["count"],row["work_count"],score=28)
-    for row in profile.get("kaomoji_candidates",[])[:6]:
-        insert("kaomoji",row["form"],row["count"],row["work_count"],score=27)
-    for row in profile.get("symbols",[])[:10]:
-        insert("symbol",row["form"],row["count"],row["work_count"],score=25)
-    # Bare final four-character tails often cut through words (e.g. 思っ).
-    # Preserve them in the local profile, but do not ask an LLM to classify
-    # these contextless fragments as if they were complete vocabulary.
-    for row in profile.get("collocations",[])[:8]:
-        insert("collocation",row["form"],row["count"],row["work_count"],score=21)
-    token_budget=max(limit-len(candidates),0) if limit else 0
-    for row in lexical_candidates(profile,limit=token_budget):
-        insert("token",row["form"],row["count"],row["work_count"],row["primary_pos"],row["selection_score"])
-
-    if limit:
-        # Keep samples from every representation category even if token count
-        # is huge, and prioritize wider document coverage within each family.
-        candidates=candidates[:limit]
+    """Meaningful vocabulary only; symbols stay in deterministic typography."""
+    if limit<0: raise ValueError("candidate limit must be >= 0")
+    if "vocabulary_units" in profile:
+        return vocabulary_candidates(profile["vocabulary_units"],limit)
+    # Old inventories lack inflection metadata: never promote clipped stems.
+    candidates=[];seen=set()
+    for row in lexical_candidates(profile,limit=0):
+        if row["form"] in seen or row["work_count"]<2:continue
+        if row["primary_pos"].startswith(("動詞", "形容詞")):continue
+        if len(row["form"])<3:continue
+        seen.add(row["form"])
+        candidates.append(dict(row,kind="token",count_basis="exact_surface"))
+        if limit and len(candidates)>=limit:break
     return [dict(row,id=f"L{i:04d}") for i,row in enumerate(candidates,1)]
 
 
@@ -478,10 +433,6 @@ def private_guide(profile:dict[str,Any], include_words:bool=False) -> str:
     for pair in profile.get("variant_pairs",[]):
         if sum(pair["counts"]):
             lines.append(f"- `{pair['variants'][0]}` vs `{pair['variants'][1]}`: {pair['counts'][0]} / {pair['counts'][1]} occurrences; document frequency {pair['work_counts'][0]} / {pair['work_counts'][1]}.")
-    if profile.get("kaomoji_candidates"):
-        lines.append("\n## Kaomoji candidates (heuristic)")
-        for row in profile["kaomoji_candidates"][:12]:
-            lines.append(f"- `{row['form']}`: {row['count']} instances")
     if include_words and profile.get("words"):
         lines.append("\n## Frequent short lexical forms (optional; contextual use only)")
         for row in profile["words"][:25]:
@@ -532,6 +483,16 @@ def main(argv:list[str]|None=None)->int:
         stats.pop("_internal_token_docs")
         stats.pop("_internal_token_pos")
         out=args.out
+        # Keep the profile compact; complete lexical-unit counts stay private in JSONL.
+        units=stats.get("vocabulary_units",[])
+        stats["vocabulary_unit_count"]=len(units)
+        stats["vocabulary_units"]=vocabulary_candidates(units,128)
+        stats["vocabulary_inventory_file"]="lexical_vocabulary.jsonl" if tagger else None
+        out.mkdir(parents=True,exist_ok=True)
+        if tagger:
+            with (out/"lexical_vocabulary.jsonl").open("w",encoding="utf-8") as f:
+                for row in units:f.write(json.dumps(row,ensure_ascii=False)+"\n")
+        else:(out/"lexical_vocabulary.jsonl").unlink(missing_ok=True)
         json_write(out/"lexical_profile.json",stats)
         json_write(out/"lexical_candidates.json",{
             "schema":"pastiche.lexical.candidates.v2", "all_forms_examined":stats["full_inventory_entries"],

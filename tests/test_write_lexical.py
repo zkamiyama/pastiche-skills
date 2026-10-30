@@ -51,7 +51,7 @@ class WriteLexicalTests(unittest.TestCase):
     def test_mixed_marks_and_kaomoji(self):
         report = mod.compare(fixture(), "「大丈夫♡♪ (・ω・)」")
         self.assertEqual(report["mixed_sequences"][0]["draft_count"], 1)
-        self.assertEqual(report["kaomoji_candidates"][0]["draft_count"], 1)
+        self.assertNotIn('kaomoji_candidates', report)
 
     def test_sparse_draft_is_not_auto_rewritten(self):
         report = mod.compare(fixture(), "一面の海を眺める。")

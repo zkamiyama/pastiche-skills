@@ -42,19 +42,18 @@ class LexicalTests(unittest.TestCase):
         runs={(r['symbol'],r['repetitions']):r for r in profile['symbol_runs']}
         self.assertEqual(runs[('♡',3)]['count'],10)
         self.assertEqual(runs[('♪',2)]['count'],10)
-        self.assertTrue(any(x['form']=='(´・ω・`)' for x in profile['kaomoji_candidates']))
+        self.assertNotIn('kaomoji_candidates',profile)
         symbols={r['form']:r for r in profile['symbols']}
         self.assertEqual(symbols['♡']['count'],40)
         self.assertEqual(symbols['♡']['work_count'],2)
         self.assertEqual(symbols['♡']['contexts']['dialogue'],40)
         self.assertNotIn('fixture_work',json.dumps(profile,ensure_ascii=False))
 
-    def test_metadata_is_not_a_kaomoji(self):
-        sample = ("（user/54483384）（illust/87089555）"
-                  "（https://example.org/path）（よとぎ・よみ）"
-                  "（´・ω・）")
-        faces = lexical.kaomoji(sample)
-        self.assertEqual(list(faces), ["（´・ω・）"])
+    def test_parenthetical_extraction_is_removed(self):
+        self.assertFalse(hasattr(lexical, 'kaomoji'))
+        guide=lexical.private_guide({'works':1,'kaomoji_candidates':[{'form':'（普通の括弧文）','count':2}]})
+        self.assertNotIn('括弧文',guide)
+        self.assertNotIn('Kaomoji',guide)
 
     def test_unicode_forms_not_normalized(self):
         raw='「来たっ！」と「来たッ！」。\n！！と!!。\n♡ ♥ ❤ ♪ ☆'

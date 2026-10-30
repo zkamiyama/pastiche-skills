@@ -12,7 +12,6 @@
 - **No Unicode normalization:** `♡`/`♥`/`❤`, `っ`/`ッ`, `！`/`!`, `♪`/`☆` are kept distinct.
 - `variant_pairs`: non-overlapping exact substring counts for each pair, per-work occurrence count, proportion within the pair, approximate dialogue/terminal use. Default examples include `じゃねえか` vs `じゃあねえか` and `来たっ！` vs `来たッ！`; supply additional pairs via `--variants`.
 - `symbols`, `symbol_runs`: character-by-character counts and exact consecutive repeat length (no arbitrary cap on the **statistics**). Mixed symbol sequences use a bounded prefix detector; emojis with multiple Unicode scalars may not be a single unit.
-- `kaomoji_candidates`: heuristic matching of compact parenthetical forms; false positives and misses are possible.
 - `sentence_endings`: last four literal characters of sentence-like units; these are candidates, not a grammatical ending parser.
 - `lexical_inventory.jsonl`: ALL surface tokens as segmented by fugashi/MeCab with observed counts, frequency per 10k tokens, word POS, number of works. This requires `pip install 'fugashi[unidic-lite]'`. Orthographic distinctions are preserved; morphological segmentation can divide a colloquial phrase into multiple tokens.
 - `collocations`: immediately adjacent content-class morphological surface forms; does not infer dependency or semantic collocation. No whole sentences exported.

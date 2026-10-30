@@ -20,7 +20,6 @@ SCHEMA = "pastiche.lexical-evaluation.v1"
 PROFILE_SCHEMA = "pastiche.lexical.v1"
 RUN_CHARS = set("♡♥❤💕💖♪♫♬☆★！!？?…")
 KAOMOJI_BRACKETS = re.compile(r"[（(][^\n()（）]{2,32}[)）]")
-FACE_MARKERS = set("ω∀Д▽・＾^´｀¬ಠ◕ツT_T;；>＜≧≦ﾉノ/ヽ∩益ﾟ°˘﹏￣")
 SENTENCE_END = re.compile(r"[^。！？!?\n]+[。！？!?]+[」』]?|[^。！？!?\n]+$")
 SENTENCE_PUNCT = "。！？!?」』\r\n "
 
@@ -149,10 +148,7 @@ def mixed_sequences(text: str) -> Counter[str]:
     return found
 
 
-def face_candidates(text: str) -> Counter[str]:
-    return Counter(m.group() for m in KAOMOJI_BRACKETS.finditer(text)
-                   if any(c in FACE_MARKERS for c in m.group()[1:-1])
-                   and not any(c in "\n。！？" for c in m.group()[1:-1]))
+
 
 
 def ending_counts(text: str) -> Counter[str]:
@@ -236,12 +232,6 @@ def compare(profile: dict[str, Any], draft: str) -> dict[str, Any]:
                    "draft_count": mixed[r["form"]]}
                   for r in profile.get("mixed_sequences", [])[:30]
                   if isinstance(r, dict) and isinstance(r.get("form"), str)]
-    faces = face_candidates(draft)
-    face_rows = [{"form": r["form"], "target_count": r.get("count", 0),
-                  "draft_count": faces[r["form"]]}
-                 for r in profile.get("kaomoji_candidates", [])[:30]
-                 if isinstance(r, dict) and isinstance(r.get("form"), str)]
-
     endings = ending_counts(draft)
     ending_rows = [{"form": r["form"], "target_count": r.get("count", 0),
                     "target_work_count": r.get("work_count", 0),
@@ -258,7 +248,6 @@ def compare(profile: dict[str, Any], draft: str) -> dict[str, Any]:
         "variant_pairs": variants,
         "symbol_runs": runs,
         "mixed_sequences": mixed_rows,
-        "kaomoji_candidates": face_rows,
         "sentence_endings": ending_rows,
         "limitations": [
             "Only measured exact forms and their counts are compared; no meaning or intent is inferred.",
