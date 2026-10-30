@@ -210,30 +210,60 @@ def parse_review(raw: Any) -> dict:
 
 def evidence_prompt(chunk: list[tuple[str, str]], observation: dict, mechanism: str) -> str:
     bound = observation['evidence_ids']; known = dict(chunk)
+    dimension = observation['dimension']
+    if dimension not in core.DIMENSIONS:
+        raise ValueError('invalid Python evidence dimension')
     if len(known) != len(chunk) or len(set(bound)) < 2 or not set(bound) <= known.keys():
         raise ValueError('invalid Python source binding')
+    if dimension == 'narrative':
+        verdict = (
+            'For narrative evidence, classify causal, intentional or rhetorical '
+            'linkage, not just temporal order. If uncertain, supported=false. '
+            'JSON {"supported":true|false,"basis":'
+            '"causal|intentional|rhetorical|temporal_only|unclear","reason":"..."}.')
+    else:
+        verdict = (
+            'This is not a narrative-causality question. Decide ONLY whether '
+            'at least TWO different selected passages support the same writing '
+            'operation. The relation basis field does not apply and is assigned '
+            'a neutral internal value by Python; do not return a basis field. '
+            'If uncertain, supported=false. JSON {"supported":true|false,"reason":"..."}.')
     return ('TASK=STYLE_EVIDENCE_PROSE. ' + RULES + explanation_instruction('reason') +
         'Python selected the exact evidence passages for ONE observation. '
-        'Decide whether at least TWO of the selected evidence passages concretely '
-        'support the claimed operation, not merely a related topic. Context is '
-        'background, not substitute evidence. For narrative require causal, '
-        'intentional or rhetorical linkage, not just temporal order. If uncertain, '
-        'supported=false. JSON {"supported":true|false,"basis":'
-        '"causal|intentional|rhetorical|temporal_only|unclear","reason":"..."}.\nEVIDENCE='
-        + data({'dimension': observation['dimension'], 'observation': descriptions(observation),
+        'Check the operation, not a shared topic. Context is background, not '
+        'substitute evidence. ' + verdict + '\nEVIDENCE='
+        + data({'dimension': dimension, 'observation': descriptions(observation),
                 'mechanism': mechanism, 'selected_passages': [known[eid] for eid in bound],
                 'context': [text for _, text in chunk]}))
 
 def parse_evidence(raw: Any) -> dict:
+    """Narrative evidence has an actual causal/intentional/rhetorical basis."""
     envelope(raw, {'supported', 'basis', 'reason'})
-    if type(raw['supported']) is not bool or not isinstance(raw['basis'], str) or raw['basis'] not in core.BASIS:
-        raise ProseError('source_verdict_invalid')
-    return {'supported': raw['supported'], 'basis': raw['basis'], 'reason': explanation(raw['reason'], field='reason')}
+    if type(raw['supported']) is not bool:
+        raise ProseError('source_support_boolean_required')
+    if not isinstance(raw['basis'], str) or raw['basis'] not in core.BASIS:
+        raise ProseError('source_basis_invalid')
+    return {'supported': raw['supported'], 'basis': raw['basis'],
+            'reason': explanation(raw['reason'], field='reason')}
 
-def evidence_verdict(raw: Any) -> dict:
-    checked = parse_evidence(raw)
-    # Reason prose may quote private source. Validate it, then discard it.
-    return {k: checked[k] for k in ('supported', 'basis')}
+def evidence_verdict(raw: Any, *, dimension: str = 'narrative') -> dict:
+    """Python binds the selected evidence; irrelevant relation types are discarded.
+
+    Non-narrative evidence needs only an explicit boolean support judgment.
+    The old non-narrative basis field is accepted but never used or exported.
+    """
+    if dimension not in core.DIMENSIONS:
+        raise ValueError('invalid Python evidence dimension')
+    if dimension == 'narrative':
+        checked = parse_evidence(raw)
+        return {k: checked[k] for k in ('supported', 'basis')}
+    envelope(raw, {'supported', 'reason'}, {'basis'})
+    if type(raw['supported']) is not bool:
+        raise ProseError('source_support_boolean_required')
+    explanation(raw['reason'], field='reason')
+    # core.valid_evidence requires a basis; "unclear" is a neutral unused
+    # placeholder for non-narrative dimensions, not an invented causal claim.
+    return {'supported': raw['supported'], 'basis': 'unclear'}
 
 def cached_evidence(raw: Any) -> dict:
     envelope(raw, {'supported', 'basis'})

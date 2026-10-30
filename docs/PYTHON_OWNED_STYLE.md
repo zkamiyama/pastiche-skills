@@ -26,7 +26,7 @@ summary record per dimension.
 | Observation | Dimension, trigger, technique, effect, a few short exact evidence quotations | Exact quote-to-segment matching; source/observation IDs and final provenance |
 | Clustering | Compatibility of one candidate with one fixed group, a common mechanism and explanation | Candidate scheduling, shortlist, membership, IDs, disjointness and retention |
 | Group review | One observation's compatibility and explanation | Which observation was reviewed and accepted |
-| Source check | Support verdict, relation basis and explanation | Selected source passages and their references |
+| Source check | Support verdict and explanation; relation basis only for narrative | Selected passages, references and neutral non-narrative basis |
 | Writing note | Plain prose for one summary OR writing-use request | Field names, JSON assembly and exactly that pattern's reference and dimension |
 
 JSON is retained for observation records, booleans and necessary category
@@ -66,6 +66,29 @@ change. `python-owned-style.v1` and all cache identities remain unchanged, and
 previously validated results are rechecked and reused. Observations, completed
 cluster panels, group reviews and valid source checks need not be regenerated.
 Do not clear caches or use `--restart` for this correction.
+
+## Dimension-scoped source checks
+
+Previous source checks required relation basis categories for sensory, lexical,
+emotional, dialogue and other non-narrative patterns. These categories only
+have semantic meaning for the narrative dimension. For non-narrative evidence,
+the model now supplies a strict boolean support verdict and an explanation.
+Python assigns the neutral internal basis value 'unclear'. A legacy extra
+basis field is ignored, never interpreted or persisted as a source relation.
+
+The model must still judge the SAME writing operation in at least TWO
+distinct selected passages. Python's source references, disjoint work checks
+and downstream promotion criteria remain strict. A false, invalid or uncertain
+support verdict is never converted to positive support.
+
+Narrative evidence still requires a recognized causal, intentional,
+rhetorical, temporal-only or unclear relation. Temporal-only/unclear cannot
+promote narrative support. Invalid boolean and narrative basis categories
+now get distinct diagnostic codes; no rejected response text is logged.
+
+Already validated source-check cache entries and all upstream checkpoints
+remain reusable. New requests use the same checkpoint identity without
+deleting cached results; do not use --restart for this correction.
 
 ## Evidence binding
 
